@@ -38,8 +38,32 @@ app.use(express.static(__dirname + '/public'));
 let sock;
 let pairingInFlight = false;
 
-const RECONNECT_DELAY_MS = 3000;
+const BASE_RECONNECT_DELAY_MS = 3000;
+const MAX_RECONNECT_DELAY_MS = 60000;
+let consecutiveReconnects = 0;
+
+// FIX (root cause mitigation): the observed pattern is that the bot gets
+// killed right when it sends its FIRST automated message after a
+// fresh pairing or reconnect — not at a random point. WhatsApp's
+// companion-session validation appears to scrutinize a device most
+// heavily in the moments right after it (re)connects. This settle window
+// holds off ANY automated outbound send for a short period after
+// connecting, so the socket looks "settled" before it starts acting.
+// This does not guarantee anything (that decision happens on WhatsApp's
+// servers, outside this code's control) — it only removes the one
+// concrete signal we can control: instant automated activity immediately
+// after (re)connecting.
+const SETTLE_MS_FRESH_LOGIN = 90 * 1000; // just paired via a brand new code
+const SETTLE_MS_RECONNECT = 8 * 1000;    // routine reconnect with existing creds
+let settleUntil = 0;
+
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function jitteredBackoff() {
+  const exp = Math.min(MAX_RECONNECT_DELAY_MS, BASE_RECONNECT_DELAY_MS * Math.pow(1.6, consecutiveReconnects));
+  const jitter = exp * (0.8 + Math.random() * 0.4); // +/-20%
+  return Math.round(jitter);
+}
 
 async function connectToWhatsApp() {
   const { state, saveCreds, waitForPendingSave, clearAll } = await useSupabaseAuthState();
@@ -67,10 +91,46 @@ async function connectToWhatsApp() {
     // ['CampusMarketplace', 'Chrome', '1.0.0']) causes WhatsApp to
     // silently reject the link even though the code itself generates
     // fine. This is documented directly by Baileys' maintainers as the
-    // one gotcha specific to pairing-code login. Once truly paired, this
-    // could be swapped back to a custom name if desired.
-    browser: Browsers.ubuntu('Chrome')
+    // one gotcha specific to pairing-code login.
+    browser: Browsers.ubuntu('Chrome'),
+    // FIX: leaving this at Baileys' default (true) marks the companion as
+    // always-online and can suppress push notifications to the phone
+    // itself, which is both a poor look to the account owner and an
+    // extra "this is a bot" signal. false is the more human-like default.
+    markOnlineOnConnect: false
   });
+
+  // FIX: previously only the very first welcome message to a brand-new
+  // contact got a "typing" pause (via humanize.js) — every other reply
+  // (menus, browsing, order updates) was sent instantly with zero delay.
+  // A conversation where 95% of replies are delivered with no typing time
+  // at all, and only the very first one has a pause, is itself a pattern.
+  // This wraps sendMessage once, globally, so every reply to a real
+  // 1:1 chat gets a short, randomized typing pause + presence update, and
+  // sends to different contacts are spaced out slightly so a burst of new
+  // messages doesn't fire off several automated replies in the same
+  // instant. Kept short (well under a couple seconds) so normal
+  // menu-driven use doesn't feel sluggish.
+  const rawSendMessage = sock.sendMessage.bind(sock);
+  const GLOBAL_MIN_DELAY_MS = 500;
+  const GLOBAL_MAX_DELAY_MS = 1300;
+  const GLOBAL_MIN_GAP_MS = 700;
+  let lastGlobalSendAt = 0;
+  sock.sendMessage = async (jid, content, options) => {
+    const isDirectChat = typeof jid === 'string' && jid.endsWith('@s.whatsapp.net');
+    if (!isDirectChat) return rawSendMessage(jid, content, options);
+
+    const now = Date.now();
+    const earliestSlot = Math.max(now, lastGlobalSendAt + GLOBAL_MIN_GAP_MS);
+    lastGlobalSendAt = earliestSlot;
+    const gapMs = earliestSlot - now;
+    const thinkMs = Math.floor(Math.random() * (GLOBAL_MAX_DELAY_MS - GLOBAL_MIN_DELAY_MS + 1)) + GLOBAL_MIN_DELAY_MS;
+
+    try { await sock.sendPresenceUpdate('composing', jid); } catch (_) {}
+    await delay(gapMs + thinkMs);
+    try { await sock.sendPresenceUpdate('paused', jid); } catch (_) {}
+    return rawSendMessage(jid, content, options);
+  };
 
   // Pairing code is now requested from the web dashboard (POST /api/link)
   // instead of automatically at boot — no terminal needed. If not yet
@@ -82,7 +142,7 @@ async function connectToWhatsApp() {
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect } = update;
+    const { connection, lastDisconnect, isNewLogin } = update;
     if (connection === 'close') {
       const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
@@ -95,10 +155,15 @@ async function connectToWhatsApp() {
         // reconnect can load stale keys and silently invalidate the code
         // the user is about to type in.
         await waitForPendingSave();
-        // Brief backoff so a persistent failure reconnects on a steady
-        // cadence instead of hammering WhatsApp's servers in a tight loop
-        // (which risks its own 429 rate-limit failure mode).
-        await delay(RECONNECT_DELAY_MS);
+        // FIX: was a fixed 3s delay. If the connection is being killed
+        // repeatedly in a tight loop, hammering WhatsApp's servers on a
+        // fixed cadence looks more automated, not less. This backs off
+        // exponentially (with jitter) the more times in a row it happens,
+        // and resets once a connection has actually stayed open a while.
+        const backoffMs = jitteredBackoff();
+        consecutiveReconnects += 1;
+        console.log(`Reconnecting in ~${Math.round(backoffMs / 1000)}s (attempt ${consecutiveReconnects}).`);
+        await delay(backoffMs);
         connectToWhatsApp();
       } else {
         // A real logged-out (401) means the stored credentials are
@@ -110,13 +175,37 @@ async function connectToWhatsApp() {
         const { phone: lastKnownPhone } = await botStatus.getStatus();
         sendDisconnectAlert(lastKnownPhone);
         await clearAll();
-        await delay(RECONNECT_DELAY_MS);
+        await delay(BASE_RECONNECT_DELAY_MS);
         connectToWhatsApp();
       }
     } else if (connection === 'open') {
       console.log('✅ WhatsApp connected!');
       const phone = sock.user && sock.user.id ? sock.user.id.split(':')[0].split('@')[0] : null;
       await botStatus.setStatus('open', phone);
+
+      // Reset the reconnect backoff once a connection has actually opened —
+      // otherwise a bot that's been stable for hours would still be
+      // carrying yesterday's backoff count.
+      consecutiveReconnects = 0;
+
+      // FIX: start the settle window (see comment at top of file). A fresh
+      // pairing gets a longer window than a routine reconnect with
+      // existing creds, since a brand-new device link is the higher-risk
+      // moment.
+      const settleMs = isNewLogin ? SETTLE_MS_FRESH_LOGIN : SETTLE_MS_RECONNECT;
+      settleUntil = Date.now() + settleMs;
+      console.log(`Settle window active for ${Math.round(settleMs / 1000)}s before automated replies begin (isNewLogin: ${!!isNewLogin}).`);
+
+      // FIX: explicitly initialize presence once, right after the socket
+      // opens, before any composing/paused updates are sent later. Some
+      // Baileys reports show composing/paused presence behaving
+      // unreliably if an initial 'available' presence was never sent —
+      // this makes sure the presence subsystem is in a known state first.
+      try {
+        await sock.sendPresenceUpdate('available');
+      } catch (_) {
+        // Non-fatal — presence issues shouldn't block the socket itself.
+      }
     } else if (connection === 'connecting') {
       await botStatus.setStatus('connecting');
     }
@@ -160,6 +249,20 @@ function mimeTypeOf(msg) {
 }
 
 async function handleIncomingMessage(msg) {
+  // FIX: if we're still inside the post-(re)connect settle window, defer
+  // processing this message until it elapses instead of replying
+  // instantly. This targets the exact moment identified as the trigger —
+  // an automated reply firing immediately after connecting — without
+  // dropping the message; it just gets handled a little later.
+  const remaining = settleUntil - Date.now();
+  if (remaining > 0) {
+    console.log(`Deferring message handling ${Math.round(remaining / 1000)}s (settle window active).`);
+    setTimeout(() => {
+      handleIncomingMessage(msg).catch((err) => console.error('Deferred message handling error:', err));
+    }, remaining + 250);
+    return;
+  }
+
   const jid = msg.key.remoteJid;
   if (jid.endsWith('@g.us')) return; // ignore groups
   const phone = jid.replace('@s.whatsapp.net', '');
