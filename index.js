@@ -2,7 +2,7 @@ require('dotenv').config();
 const {
   default: makeWASocket,
   DisconnectReason,
-  fetchLatestWaWebVersion,
+  Browsers,
   downloadMediaMessage
 } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
@@ -38,14 +38,23 @@ let pairingInFlight = false;
 
 async function connectToWhatsApp() {
   const { state, saveCreds, waitForPendingSave, clearAll } = await useSupabaseAuthState();
-  const { version } = await fetchLatestWaWebVersion();
 
+  // Per Baileys' own docs: don't fetch/pin the "latest" WA Web version on
+  // every connect — that can cause incompatibility. Leaving `version`
+  // unset uses the library's bundled default, which is the version this
+  // installed release was actually built and tested against.
   sock = makeWASocket({
-    version,
     auth: state,
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
-    browser: ['CampusMarketplace', 'Chrome', '1.0.0']
+    // Pairing-code login specifically requires a real, recognized
+    // platform triplet here — a custom/branded name (e.g. our old
+    // ['CampusMarketplace', 'Chrome', '1.0.0']) causes WhatsApp to
+    // silently reject the link even though the code itself generates
+    // fine. This is documented directly by Baileys' maintainers as the
+    // one gotcha specific to pairing-code login. Once truly paired, this
+    // could be swapped back to a custom name if desired.
+    browser: Browsers.ubuntu('Chrome')
   });
 
   // Pairing code is now requested from the web dashboard (POST /api/link)
