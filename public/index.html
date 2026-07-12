@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CampusMarketplace Bot</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: #0f1115; color: #eaeaea; margin: 0; padding: 20px;
+  }
+  .card {
+    background: #171a21; border-radius: 14px; padding: 20px; margin-bottom: 16px;
+    border: 1px solid #262a33;
+  }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  h2 { font-size: 15px; margin: 0 0 12px; color: #9aa3b2; text-transform: uppercase; letter-spacing: 0.5px; }
+  .status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .dot.open { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+  .dot.close { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
+  .dot.connecting { background: #eab308; box-shadow: 0 0 8px #eab308; }
+  .muted { color: #9aa3b2; font-size: 13px; }
+  input {
+    width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #333844;
+    background: #0f1115; color: #eaeaea; font-size: 16px; margin-bottom: 10px;
+  }
+  button {
+    width: 100%; padding: 12px; border-radius: 8px; border: none;
+    background: #6366f1; color: white; font-size: 16px; font-weight: 600;
+  }
+  button:disabled { opacity: 0.5; }
+  .code-box {
+    font-size: 28px; font-weight: 700; letter-spacing: 4px; text-align: center;
+    background: #0f1115; border: 1px dashed #6366f1; border-radius: 10px;
+    padding: 16px; margin-top: 12px; color: #a5b4fc;
+  }
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat { background: #0f1115; border-radius: 10px; padding: 14px; text-align: center; }
+  .stat .num { font-size: 24px; font-weight: 700; }
+  .stat .label { font-size: 12px; color: #9aa3b2; margin-top: 4px; }
+  .msg { font-size: 13px; margin-top: 8px; }
+  .msg.err { color: #f87171; }
+  .msg.ok { color: #4ade80; }
+</style>
+</head>
+<body>
+
+  <div class="card">
+    <h1>📦 CampusMarketplace Bot</h1>
+    <div class="status-row">
+      <div class="dot connecting" id="statusDot"></div>
+      <div>
+        <div id="statusText">Checking...</div>
+        <div class="muted" id="statusMeta"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="linkCard">
+    <h2>Link WhatsApp</h2>
+    <p class="muted">Enter the number the bot should run on (country code, no +). Use a dedicated SIM, not your main number.</p>
+    <input id="phoneInput" type="tel" placeholder="2348012345678" />
+    <button id="linkBtn" onclick="requestCode()">Get Pairing Code</button>
+    <div id="codeBox" class="code-box" style="display:none;"></div>
+    <div id="linkMsg" class="msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>Quick Stats</h2>
+    <div class="stats-grid">
+      <div class="stat"><div class="num" id="statPending">–</div><div class="label">Pending Listings</div></div>
+      <div class="stat"><div class="num" id="statActive">–</div><div class="label">Active Listings</div></div>
+      <div class="stat"><div class="num" id="statReceipts">–</div><div class="label">Pending Receipts</div></div>
+      <div class="stat"><div class="num" id="statUsers">–</div><div class="label">Total Users</div></div>
+    </div>
+  </div>
+
+<script>
+async function refreshStatus() {
+  try {
+    const res = await fetch('/api/status');
+    const data = await res.json();
+    const dot = document.getElementById('statusDot');
+    const text = document.getElementById('statusText');
+    const meta = document.getElementById('statusMeta');
+    dot.className = 'dot ' + data.status;
+    if (data.status === 'open') {
+      text.textContent = '✅ Connected';
+      document.getElementById('linkCard').style.display = 'none';
+    } else if (data.status === 'connecting') {
+      text.textContent = '🟡 Connecting...';
+    } else {
+      text.textContent = '🔴 Not connected';
+      document.getElementById('linkCard').style.display = 'block';
+    }
+    meta.textContent = data.phone ? `Number: ${data.phone} · Updated ${new Date(data.updatedAt).toLocaleString()}` : `Updated ${new Date(data.updatedAt).toLocaleString()}`;
+  } catch (e) {}
+}
+
+async function refreshStats() {
+  try {
+    const res = await fetch('/api/stats');
+    const data = await res.json();
+    document.getElementById('statPending').textContent = data.pendingListings;
+    document.getElementById('statActive').textContent = data.activeListings;
+    document.getElementById('statReceipts').textContent = data.pendingReceipts;
+    document.getElementById('statUsers').textContent = data.totalUsers;
+  } catch (e) {}
+}
+
+async function requestCode() {
+  const phone = document.getElementById('phoneInput').value.trim();
+  const msg = document.getElementById('linkMsg');
+  const btn = document.getElementById('linkBtn');
+  msg.textContent = '';
+  msg.className = 'msg';
+  if (!/^\d{10,15}$/.test(phone)) {
+    msg.textContent = 'Enter digits only, with country code, no +.';
+    msg.className = 'msg err';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Requesting...';
+  try {
+    const res = await fetch('/api/link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone })
+    });
+    const data = await res.json();
+    if (data.alreadyLinked) {
+      msg.textContent = 'Already linked!';
+      msg.className = 'msg ok';
+    } else if (data.code) {
+      document.getElementById('codeBox').style.display = 'block';
+      document.getElementById('codeBox').textContent = data.code;
+      msg.textContent = 'Open WhatsApp > Linked Devices > Link with phone number, and enter this code.';
+      msg.className = 'msg ok';
+    } else {
+      msg.textContent = data.error || 'Something went wrong.';
+      msg.className = 'msg err';
+    }
+  } catch (e) {
+    msg.textContent = 'Request failed. Try again.';
+    msg.className = 'msg err';
+  }
+  btn.disabled = false;
+  btn.textContent = 'Get Pairing Code';
+}
+
+refreshStatus();
+refreshStats();
+setInterval(refreshStatus, 5000);
+setInterval(refreshStats, 15000);
+</script>
+</body>
+</html>
