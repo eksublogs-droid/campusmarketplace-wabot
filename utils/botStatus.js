@@ -12,7 +12,11 @@ let state = {
 
 async function setStatus(status, phone) {
   state = { status, phone: phone || state.phone, updatedAt: new Date().toISOString() };
-  await supabase.from('auth_state').upsert({ key: 'bot_status', value: state }).catch(() => {});
+  try {
+    await supabase.from('auth_state').upsert({ key: 'bot_status', value: state });
+  } catch (err) {
+    // Non-fatal: in-memory state above already updated; Supabase mirror can lag.
+  }
 }
 
 async function getStatus() {
