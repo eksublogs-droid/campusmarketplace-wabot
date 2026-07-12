@@ -23,6 +23,15 @@ async function useSupabaseAuthState() {
 
   const creds = (await readData('creds')) || initAuthCreds();
 
+  // Baileys fires the 'creds.update' event (which calls saveCreds) but does
+  // NOT wait for it to finish before it may close/reconnect the socket â€”
+  // e.g. right after requestPairingCode(), which triggers a near-immediate
+  // restart. If a reconnect reloads creds from Supabase before this write
+  // lands, it gets stale keys and the pairing code becomes invalid even
+  // though the user typed it in fast enough. We track the in-flight save so
+  // the reconnect logic can explicitly wait for it first.
+  let pendingSave = Promise.resolve();
+
   return {
     state: {
       creds,
@@ -53,7 +62,13 @@ async function useSupabaseAuthState() {
         }
       }
     },
-    saveCreds: () => writeData('creds', creds)
+    saveCreds: () => {
+      pendingSave = writeData('creds', creds);
+      return pendingSave;
+    },
+    // Call this before reconnecting to guarantee the latest creds (e.g. the
+    // ones tied to a just-issued pairing code) are actually persisted first.
+    waitForPendingSave: () => pendingSave
   };
 }
 
