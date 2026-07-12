@@ -21,6 +21,10 @@ async function useSupabaseAuthState() {
     await supabase.from('auth_state').delete().eq('key', key);
   };
 
+  const clearAll = async () => {
+    await supabase.from('auth_state').delete().neq('key', '');
+  };
+
   const creds = (await readData('creds')) || initAuthCreds();
 
   // Baileys fires the 'creds.update' event (which calls saveCreds) but does
@@ -68,7 +72,11 @@ async function useSupabaseAuthState() {
     },
     // Call this before reconnecting to guarantee the latest creds (e.g. the
     // ones tied to a just-issued pairing code) are actually persisted first.
-    waitForPendingSave: () => pendingSave
+    waitForPendingSave: () => pendingSave,
+    // Wipes all persisted auth data. Used to self-heal after WhatsApp
+    // reports a real logged-out/invalid session, so the next boot starts
+    // completely clean instead of retrying forever with dead credentials.
+    clearAll
   };
 }
 
