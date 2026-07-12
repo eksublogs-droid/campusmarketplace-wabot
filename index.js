@@ -3,7 +3,8 @@ const {
   default: makeWASocket,
   DisconnectReason,
   Browsers,
-  downloadMediaMessage
+  downloadMediaMessage,
+  fetchLatestWaWebVersion
 } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const express = require('express');
@@ -36,17 +37,30 @@ app.use(express.static(__dirname + '/public'));
 let sock;
 let pairingInFlight = false;
 
+const RECONNECT_DELAY_MS = 3000;
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function connectToWhatsApp() {
   const { state, saveCreds, waitForPendingSave, clearAll } = await useSupabaseAuthState();
 
-  // Per Baileys' own docs: don't fetch/pin the "latest" WA Web version on
-  // every connect — that can cause incompatibility. Leaving `version`
-  // unset uses the library's bundled default, which is the version this
-  // installed release was actually built and tested against.
+  // Baileys' own docs say to use the bundled default version instead of
+  // fetching latest — normally correct. But the bundled default is
+  // currently stale (WhiskeySockets/Baileys#1929), so WhatsApp's servers
+  // reject the handshake with it right now. Fetching the live version
+  // fixes that; if the fetch itself fails, fall back to the bundled
+  // default rather than crashing the boot.
+  let version;
+  try {
+    ({ version } = await fetchLatestWaWebVersion());
+  } catch (err) {
+    console.error('Could not fetch latest WA web version, using bundled default:', err.message);
+  }
+
   sock = makeWASocket({
     auth: state,
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
+    version,
     // Pairing-code login specifically requires a real, recognized
     // platform triplet here — a custom/branded name (e.g. our old
     // ['CampusMarketplace', 'Chrome', '1.0.0']) causes WhatsApp to
@@ -71,7 +85,7 @@ async function connectToWhatsApp() {
     if (connection === 'close') {
       const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      console.log('Connection closed. Reconnecting:', shouldReconnect);
+      console.log(`Connection closed. statusCode: ${statusCode}. Reconnecting: ${shouldReconnect}`);
       await botStatus.setStatus('close');
       if (shouldReconnect) {
         // Make sure any in-flight creds write (e.g. from a just-issued
@@ -80,6 +94,10 @@ async function connectToWhatsApp() {
         // reconnect can load stale keys and silently invalidate the code
         // the user is about to type in.
         await waitForPendingSave();
+        // Brief backoff so a persistent failure reconnects on a steady
+        // cadence instead of hammering WhatsApp's servers in a tight loop
+        // (which risks its own 429 rate-limit failure mode).
+        await delay(RECONNECT_DELAY_MS);
         connectToWhatsApp();
       } else {
         // A real logged-out (401) means the stored credentials are
@@ -89,6 +107,7 @@ async function connectToWhatsApp() {
         // fresh, unregistered session so a new pairing code can be issued.
         console.log('Logged out — clearing stale auth state and starting fresh session.');
         await clearAll();
+        await delay(RECONNECT_DELAY_MS);
         connectToWhatsApp();
       }
     } else if (connection === 'open') {
