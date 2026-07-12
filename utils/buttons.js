@@ -12,25 +12,16 @@
 // from the text version and everything still works.
 //
 // options: [{ id: 'buy', label: '🛍️ Buy Used Items' }, ...]
+//
+// FIX: previously this tried WhatsApp's interactive "buttons" message first
+// and only fell back to plain numbered text if sendMessage *threw*. In
+// practice, on many devices WhatsApp doesn't throw at all — it silently
+// accepts the message and just drops the footer and buttons on render,
+// leaving the user with only the bare bodyText and no visible options or
+// instructions. Since nothing errors, the fallback never triggered. Now we
+// always send the numbered options directly inside the text body itself,
+// so they're visible no matter what device/WhatsApp version renders it.
 async function sendButtonMenu(sock, jid, bodyText, options, footerText) {
-  try {
-    await sock.sendMessage(jid, {
-      text: bodyText,
-      footer: footerText || '',
-      buttons: options.map((opt, i) => ({
-        buttonId: opt.id || String(i + 1),
-        buttonText: { displayText: opt.label },
-        type: 1
-      })),
-      headerType: 1
-    });
-  } catch (err) {
-    console.error('Button send failed, falling back to text menu:', err.message);
-    await sendTextFallback(sock, jid, bodyText, options, footerText);
-  }
-}
-
-async function sendTextFallback(sock, jid, bodyText, options, footerText) {
   const lines = [bodyText, ''];
   options.forEach((opt, i) => lines.push(`${i + 1}️⃣ ${opt.label}`));
   if (footerText) { lines.push(''); lines.push(footerText); }
