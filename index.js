@@ -2,7 +2,7 @@ require('dotenv').config();
 const {
   default: makeWASocket,
   DisconnectReason,
-  fetchLatestBaileysVersion,
+  fetchLatestWaWebVersion,
   downloadMediaMessage
 } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
@@ -38,7 +38,7 @@ let pairingInFlight = false;
 
 async function connectToWhatsApp() {
   const { state, saveCreds, waitForPendingSave, clearAll } = await useSupabaseAuthState();
-  const { version } = await fetchLatestBaileysVersion();
+  const { version } = await fetchLatestWaWebVersion();
 
   sock = makeWASocket({
     version,
