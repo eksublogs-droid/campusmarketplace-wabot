@@ -29,6 +29,7 @@ const {
 } = require('./handlers/upgrade');
 const { isAdmin, handleAdminCommand } = require('./handlers/admin');
 const { checkExpiringProPlans, demoteExpiredProPlans, deleteOldSoldProducts } = require('./utils/cron');
+const { sendDisconnectAlert } = require('./utils/mailer');
 
 const app = express();
 app.use(express.json());
@@ -106,6 +107,8 @@ async function connectToWhatsApp() {
         // manual redeploy. Instead, wipe the stale auth state and boot a
         // fresh, unregistered session so a new pairing code can be issued.
         console.log('Logged out — clearing stale auth state and starting fresh session.');
+        const { phone: lastKnownPhone } = await botStatus.getStatus();
+        sendDisconnectAlert(lastKnownPhone);
         await clearAll();
         await delay(RECONNECT_DELAY_MS);
         connectToWhatsApp();
