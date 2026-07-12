@@ -37,7 +37,7 @@ let sock;
 let pairingInFlight = false;
 
 async function connectToWhatsApp() {
-  const { state, saveCreds } = await useSupabaseAuthState();
+  const { state, saveCreds, waitForPendingSave } = await useSupabaseAuthState();
   const { version } = await fetchLatestBaileysVersion();
 
   sock = makeWASocket({
@@ -64,7 +64,15 @@ async function connectToWhatsApp() {
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       console.log('Connection closed. Reconnecting:', shouldReconnect);
       await botStatus.setStatus('close');
-      if (shouldReconnect) connectToWhatsApp();
+      if (shouldReconnect) {
+        // Make sure any in-flight creds write (e.g. from a just-issued
+        // pairing code) has actually landed in Supabase before we spin up
+        // a new socket that reloads creds from there. Without this, a fast
+        // reconnect can load stale keys and silently invalidate the code
+        // the user is about to type in.
+        await waitForPendingSave();
+        connectToWhatsApp();
+      }
     } else if (connection === 'open') {
       console.log('✅ WhatsApp connected!');
       const phone = sock.user && sock.user.id ? sock.user.id.split(':')[0].split('@')[0] : null;
