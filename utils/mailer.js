@@ -10,12 +10,33 @@
 //
 // Fire-and-forget by design: a mail hiccup (bad creds, Gmail hiccup, no
 // network) must never throw into the reconnect logic in index.js.
+//
+// FIX: two problems in the previous version, both discovered while
+// debugging the WhatsApp disconnect issue:
+//   1. The catch block only logged `err.message`, which for a socket/TLS
+//      error is often blank or unhelpful — the actual reason (auth
+//      rejected, connection refused, timeout) lived on `err.stack` /
+//      `err.code` and was getting thrown away. We now log everything.
+//   2. If WhatsApp logs the bot out repeatedly in a short window (which is
+//      exactly the failure mode being debugged), this function fires a
+//      fresh SMTP AUTH LOGIN to Gmail every single time. Repeated automated
+//      logins to the same Gmail account in a short burst is itself a
+//      pattern Gmail's own abuse/anti-automation system watches for, and
+//      can silently start rejecting or throttling — which would explain
+//      alert emails failing for a *second*, unrelated reason. A simple
+//      cooldown means at most one alert email per window, no matter how
+//      many times the bot gets logged out.
 
 const tls = require('tls');
 
 const SMTP_HOST = 'smtp.gmail.com';
 const SMTP_PORT = 465; // implicit TLS — no STARTTLS upgrade needed
 const SOCKET_TIMEOUT_MS = 15000;
+
+// Don't send more than one disconnect alert this often, regardless of how
+// many times the bot actually gets logged out in that window.
+const MIN_ALERT_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+let lastAlertSentAt = 0;
 
 const b64 = (str) => Buffer.from(str, 'utf8').toString('base64');
 
@@ -93,6 +114,14 @@ async function sendGmail({ user, pass, to, fromName, subject, text }) {
 }
 
 async function sendDisconnectAlert(phone) {
+  const now = Date.now();
+  const sinceLast = now - lastAlertSentAt;
+  if (sinceLast < MIN_ALERT_INTERVAL_MS) {
+    const waitMinLeft = Math.ceil((MIN_ALERT_INTERVAL_MS - sinceLast) / 60000);
+    console.log(`Disconnect alert suppressed (cooldown active, ~${waitMinLeft} min left) — avoids hammering Gmail with repeat logins.`);
+    return;
+  }
+
   const user = process.env.ALERT_EMAIL_USER;
   const pass = process.env.ALERT_EMAIL_APP_PASSWORD;
   const to = process.env.ALERT_EMAIL_TO;
@@ -113,11 +142,20 @@ async function sendDisconnectAlert(phone) {
         `The WhatsApp bot${phone ? ` (${phone})` : ''} was logged out by WhatsApp at ${new Date().toISOString()}.\n\n` +
         `It has cleared its old session automatically and is now waiting for a fresh pairing code from the dashboard.\n\n` +
         `Check now: https://campusmarketplace-wabot-production.up.railway.app/\n\n` +
-        `Open that link and re-link the number when you get a chance.`
+        `Open that link and re-link the number when you get a chance.\n\n` +
+        `(Further disconnect alerts are suppressed for ${MIN_ALERT_INTERVAL_MS / 60000} minutes after this one, ` +
+        `so repeated logouts won't spam this inbox or hammer the mail server.)`
     });
+    lastAlertSentAt = now;
     console.log('📧 Disconnect alert email sent.');
   } catch (err) {
-    console.error('Failed to send disconnect alert email:', err.message);
+    // FIX: log everything available — message, stack, and any SMTP/socket
+    // error code — instead of just err.message, which was getting cut off
+    // with no useful detail last time this failed.
+    console.error('Failed to send disconnect alert email.');
+    console.error('  message:', err.message);
+    if (err.code) console.error('  code:', err.code);
+    if (err.stack) console.error('  stack:', err.stack);
   }
 }
 
