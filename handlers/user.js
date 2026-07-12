@@ -121,30 +121,17 @@ async function sendProductCard(sock, jid, product, user) {
     `🚚 Dropoff: ${product.door_dropoff ? 'Yes' : 'No'} | 🚶 Pickup: ${product.door_pickup ? 'Yes' : 'No'}`;
 
   const firstMedia = Array.isArray(product.media) && product.media[0];
-  const buttons = [
-    { buttonId: '1', buttonText: { displayText: '💬 Contact Seller' }, type: 1 },
-    { buttonId: '0', buttonText: { displayText: '⬅️ Back' }, type: 1 }
-  ];
+  caption += '\n\n1️⃣ 💬 Contact Seller\n0️⃣ ⬅️ Back';
 
   try {
     if (firstMedia && firstMedia.type === 'photo') {
-      await sock.sendMessage(jid, {
-        image: { url: firstMedia.url }, caption,
-        footer: 'You can also just type 1 or 0.', buttons, headerType: 4
-      });
+      await sock.sendMessage(jid, { image: { url: firstMedia.url }, caption });
     } else {
-      await sock.sendMessage(jid, {
-        text: caption, footer: 'You can also just type 1 or 0.', buttons, headerType: 1
-      });
+      await sock.sendMessage(jid, { text: caption });
     }
   } catch (err) {
-    console.error('Button send failed, falling back to text:', err.message);
-    const fallback = caption + '\n\nReply *1* to contact the seller now, or *0* to go back.';
-    if (firstMedia && firstMedia.type === 'photo') {
-      await sock.sendMessage(jid, { image: { url: firstMedia.url }, caption: fallback });
-    } else {
-      await sock.sendMessage(jid, { text: fallback });
-    }
+    console.error('Product card send failed, falling back to text:', err.message);
+    await sock.sendMessage(jid, { text: caption });
   }
 
   setSession(jid, 'viewing_product');
