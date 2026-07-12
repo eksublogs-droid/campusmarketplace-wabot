@@ -3,6 +3,7 @@ const productRepo = require('../repos/productRepo');
 const { setSession, updateSession, getSession, clearSession } = require('../utils/session');
 const { buildMenu } = require('../utils/menu');
 const { sendButtonMenu } = require('../utils/buttons');
+const { sendLikeHuman, pickVariant } = require('../utils/humanize');
 
 const MAIN_OPTIONS = [
   { label: '🛍️ Buy Used Items' },
@@ -12,9 +13,18 @@ const MAIN_OPTIONS = [
   { label: '❓ Help' }
 ];
 
+// Several phrasings for the very first message a new contact gets — picked
+// at random so it isn't a byte-identical template every time.
+const WELCOME_VARIANTS = [
+  '👋 Welcome to *CampusMarketplace*!\n\nWhat should I call you? (your first name)',
+  '👋 Hey, thanks for reaching out — this is *CampusMarketplace*!\n\nWhat\'s your first name?',
+  '👋 Hi there! You\'ve reached *CampusMarketplace*.\n\nWhat should I call you? (first name is fine)',
+  '👋 Welcome aboard — *CampusMarketplace* here!\n\nMind sharing your first name?'
+];
+
 async function askName(sock, jid) {
   setSession(jid, 'awaiting_name');
-  await sock.sendMessage(jid, { text: '👋 Welcome to *CampusMarketplace*!\n\nWhat should I call you? (your first name)' });
+  await sendLikeHuman(sock, jid, pickVariant(WELCOME_VARIANTS));
 }
 
 async function handleNameInput(sock, jid, text, user) {
