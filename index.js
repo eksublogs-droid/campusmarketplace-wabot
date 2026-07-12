@@ -37,7 +37,7 @@ let sock;
 let pairingInFlight = false;
 
 async function connectToWhatsApp() {
-  const { state, saveCreds, waitForPendingSave } = await useSupabaseAuthState();
+  const { state, saveCreds, waitForPendingSave, clearAll } = await useSupabaseAuthState();
   const { version } = await fetchLatestBaileysVersion();
 
   sock = makeWASocket({
@@ -71,6 +71,15 @@ async function connectToWhatsApp() {
         // reconnect can load stale keys and silently invalidate the code
         // the user is about to type in.
         await waitForPendingSave();
+        connectToWhatsApp();
+      } else {
+        // A real logged-out (401) means the stored credentials are
+        // permanently invalid — WhatsApp will keep rejecting them forever.
+        // Previously this left `sock` dead with no way to recover except a
+        // manual redeploy. Instead, wipe the stale auth state and boot a
+        // fresh, unregistered session so a new pairing code can be issued.
+        console.log('Logged out — clearing stale auth state and starting fresh session.');
+        await clearAll();
         connectToWhatsApp();
       }
     } else if (connection === 'open') {
