@@ -1,212 +1,216 @@
+const userRepo = require('../repos/userRepo');
 const productRepo = require('../repos/productRepo');
 const { setSession, updateSession, getSession, clearSession } = require('../utils/session');
-const { uploadBuffer } = require('../utils/media');
-const { sendSmartMenu, sendFlow } = require('../utils/interactive');
+const { buildMenu } = require('../utils/menu');
+const { sendButtonMenu } = require('../utils/buttons');
+const { sendListMenu, sendButtons, sendCtaUrl } = require('../utils/interactive');
+const { sendLikeHuman, pickVariant } = require('../utils/humanize');
 
-// Steps that support a short fixed set of choices now show reply
-// buttons/list options (auto-picked by count) instead of asking the user to
-// free-type a value — but typing still works too (a typed value that isn't
-// one of the numbered ids is used as-is), so nothing breaks for anyone
-// whose client doesn't render the interactive UI.
-const STEPS = [
-  { step: 'sell_name', field: 'name', question: '📦 What are you selling? (item name)' },
-  {
-    step: 'sell_category', field: 'category', question: '🗂 Pick a category (or type your own):',
-    options: ['Electronics', 'Fashion', 'Books', 'Home & Living', 'Other']
-  },
-  {
-    step: 'sell_condition', field: 'condition', question: '⚙️ What condition is it in?',
-    options: ['New', 'Fairly Used', 'Used - Faulty']
-  },
-  { step: 'sell_price', field: 'selling_price', question: '💰 Selling price? (numbers only, e.g. 15000)', numeric: true },
-  { step: 'sell_description', field: 'description', question: '📝 Brief description of the item?' },
-  { step: 'sell_state', field: 'state', question: '📍 What state are you in?' },
-  { step: 'sell_city', field: 'city', question: '🏙 What city/town?' },
-  { step: 'sell_whatsapp', field: 'seller_whatsapp', question: '📱 WhatsApp number for buyers to reach you (with country code, no +)?' },
-  { step: 'sell_media', field: null, question: '📸 Send 1-5 photos of the item now (send them one at a time). Reply *done* when finished.' }
+const MAIN_OPTIONS = [
+  { label: '🛍️ Buy Used Items' },
+  { label: '💰 Sell an Item' },
+  { label: '📋 My Listings' },
+  { label: '💎 Upgrade a Listing to Pro' },
+  { label: '❓ Help' }
 ];
 
-// Sends a step's question, using reply buttons/list when it has a fixed
-// options set, plain text otherwise.
-async function askStep(sock, jid, stepDef) {
-  if (stepDef.options) {
-    return sendSmartMenu(
-      sock, jid, stepDef.question,
-      stepDef.options.map((label, i) => ({ id: String(i + 1), label })),
-      { footer: 'Or just type your own answer.' }
-    );
-  }
-  return sock.sendMessage(jid, { text: stepDef.question });
+// Several phrasings for the very first message a new contact gets — picked
+// at random so it isn't a byte-identical template every time.
+const WELCOME_VARIANTS = [
+  '👋 Welcome to *CampusMarketplace*!\n\nWhat should I call you? (your first name)',
+  '👋 Hey, thanks for reaching out — this is *CampusMarketplace*!\n\nWhat\'s your first name?',
+  '👋 Hi there! You\'ve reached *CampusMarketplace*.\n\nWhat should I call you? (first name is fine)',
+  '👋 Welcome aboard — *CampusMarketplace* here!\n\nMind sharing your first name?'
+];
+
+async function askName(sock, jid) {
+  setSession(jid, 'awaiting_name');
+  await sendLikeHuman(sock, jid, pickVariant(WELCOME_VARIANTS));
 }
 
-async function startSellFlow(sock, jid, user) {
-  updateSession(jid, { sellData: {}, sellMedia: [] });
-
-  // Optional: if a "Sell an Item" WhatsApp Flow is published and its ID is
-  // set in WA_SELL_FLOW_ID, use it for a native multi-step form instead of
-  // the chat Q&A below. If it's not configured (or the send fails), this
-  // silently falls through to the original step-by-step conversation — the
-  // Flow is a pure upgrade, never a requirement.
-  const flowId = process.env.WA_SELL_FLOW_ID;
-  if (flowId) {
-    const flowToken = `sell_${user.id}_${Date.now()}`;
-    updateSession(jid, { sellFlowToken: flowToken });
-    const launched = await sendFlow(sock, jid, {
-      flowId,
-      flowToken,
-      bodyText: '📦 Let\'s list your item! Fill in the quick form below.',
-      cta: 'Start Selling'
-    });
-    if (launched) {
-      setSession(jid, 'sell_flow_pending');
-      return;
-    }
-  }
-
-  setSession(jid, STEPS[0].step);
-  await askStep(sock, jid, STEPS[0]);
+async function handleNameInput(sock, jid, text, user) {
+  const name = (text || '').trim();
+  if (!name) return sock.sendMessage(jid, { text: 'Please type your name.' });
+  const updated = await userRepo.updateUser(user.id, { name });
+  setSession(jid, 'awaiting_email');
+  await sock.sendMessage(jid, { text: `Nice to meet you, ${name}! 📧 What's your email address? (used for order confirmations)` });
+  return updated;
 }
 
-function currentStepIndex(sessionStep) {
-  return STEPS.findIndex(s => s.step === sessionStep);
-}
-
-async function handleSellTextStep(sock, jid, text, user) {
-  const session = getSession(jid);
-  const idx = currentStepIndex(session.step);
-  if (idx === -1) return;
-  const stepDef = STEPS[idx];
-
-  if (stepDef.field === null) {
-    if ((text || '').trim().toLowerCase() === 'done') {
-      return finishSellFlow(sock, jid, user);
-    }
-    return sock.sendMessage(jid, { text: '📸 Send a photo, or reply *done* when finished.' });
-  }
-
-  let value = (text || '').trim();
-
-  // A reply-button/list id ("1","2"...) maps back to its option label; any
-  // other text (typed freely, or the "Other" fallback) is used as-is.
-  if (stepDef.options) {
-    const n = parseInt(value, 10);
-    if (!isNaN(n) && n >= 1 && n <= stepDef.options.length) value = stepDef.options[n - 1];
-  }
-
-  if (stepDef.numeric) {
-    const n = parseInt(value.replace(/[^\d]/g, ''), 10);
-    if (isNaN(n) || n <= 0) return sock.sendMessage(jid, { text: '❌ Please enter a valid number.' });
-    value = n;
-  }
-
-  const sellData = (session.data && session.data.sellData) || {};
-  sellData[stepDef.field] = value;
-  updateSession(jid, { sellData });
-
-  const nextIdx = idx + 1;
-  if (nextIdx >= STEPS.length) return finishSellFlow(sock, jid, user);
-
-  setSession(jid, STEPS[nextIdx].step);
-  await askStep(sock, jid, STEPS[nextIdx]);
-}
-
-async function handleSellMedia(sock, jid, buffer, mimeType) {
-  const session = getSession(jid);
-  if (!session || session.step !== 'sell_media') return false;
-
-  const media = (session.data && session.data.sellMedia) || [];
-  if (media.length >= 5) {
-    await sock.sendMessage(jid, { text: '⚠️ Max 5 photos/videos reached. Reply *done* to submit.' });
-    return true;
-  }
-
-  try {
-    const url = await uploadBuffer(buffer, mimeType, 'product-media');
-    media.push({ url, type: mimeType.includes('video') ? 'video' : 'photo' });
-    updateSession(jid, { sellMedia: media });
-    await sock.sendMessage(jid, { text: `✅ Media ${media.length}/5 received. Send more or reply *done*.` });
-  } catch (err) {
-    console.error('Media upload error:', err.message);
-    await sock.sendMessage(jid, { text: '❌ Upload failed, please try sending that again.' });
-  }
-  return true;
-}
-
-// Called by index.js when a "Sell an Item" Flow submission (nfm_reply)
-// comes back. The Flow's field names must match: name, category,
-// condition, selling_price, description, state, city, seller_whatsapp
-// (see flows/sell-item-flow.json). Flows can't reliably collect photo
-// uploads, so we still collect those the normal way afterwards.
-async function handleSellFlowSubmission(sock, jid, flowData, user) {
-  const sellData = {
-    name: flowData.name,
-    category: flowData.category,
-    condition: flowData.condition,
-    selling_price: parseInt(String(flowData.selling_price || '').replace(/[^\d]/g, ''), 10),
-    description: flowData.description,
-    state: flowData.state,
-    city: flowData.city,
-    seller_whatsapp: flowData.seller_whatsapp
-  };
-
-  if (!sellData.name || !sellData.selling_price) {
-    await sock.sendMessage(jid, { text: '❌ That form submission looked incomplete — let\'s try the questions here instead.' });
-    setSession(jid, STEPS[0].step);
-    return askStep(sock, jid, STEPS[0]);
-  }
-
-  updateSession(jid, { sellData, sellMedia: [] });
-  setSession(jid, 'sell_media');
-  await sock.sendMessage(jid, {
-    text: `✅ Got it, *${sellData.name}*! Now send 1-5 photos of the item (one at a time). Reply *done* when finished.`
-  });
-}
-
-async function finishSellFlow(sock, jid, user) {
-  const session = getSession(jid);
-  const sellData = (session.data && session.data.sellData) || {};
-  const sellMedia = (session.data && session.data.sellMedia) || [];
-
-  if (sellMedia.length === 0) {
-    return sock.sendMessage(jid, { text: '📸 Please send at least 1 photo before finishing.' });
-  }
-
-  const product = await productRepo.createProduct({
-    ...sellData,
-    media: sellMedia,
-    posted_by: 'user',
-    status: 'pending'
-  });
+async function handleEmailInput(sock, jid, text, user) {
+  const email = (text || '').trim();
+  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  if (!valid) return sock.sendMessage(jid, { text: '❌ That doesn\'t look like a valid email. Try again:' });
+  const updated = await userRepo.updateUser(user.id, { email, email_submitted: true });
   clearSession(jid);
-
-  await sock.sendMessage(jid, {
-    text:
-      `✅ *Listing submitted for review!*\n\n` +
-      `📦 ${product.name}\n💰 ₦${Number(product.selling_price).toLocaleString()}\n\n` +
-      `Our team will review it shortly. You'll get a message here once it's approved. Reply *menu* to return.`
-  });
-
-  const adminJid = `${process.env.ADMIN_WHATSAPP}@s.whatsapp.net`;
-  const notifyText =
-    `🆕 *New Listing Pending Review*\n\n` +
-    `📦 ${product.name}\n💰 ₦${Number(product.selling_price).toLocaleString()}\n📍 ${product.city}, ${product.state}\n` +
-    `👤 Seller: ${user.name} (${user.phone})`;
-
-  // Reply buttons let the admin approve/reject with a tap — the button
-  // `id` is the exact same text command handlers/admin.js already parses,
-  // so no admin.js changes were needed for this to work.
-  await sock.sendMessage(adminJid, {
-    buttons: {
-      body: notifyText,
-      footer: 'Tap to review, or type the command manually.',
-      buttons: [
-        { id: `approve ${product.id}`, title: '✅ Approve' },
-        { id: `reject ${product.id}`, title: '❌ Reject' }
-      ]
-    }
-  }).catch(() => {});
-
-  setSession(jid, 'main_menu');
+  await showMainMenu(sock, jid, updated);
 }
 
-module.exports = { startSellFlow, handleSellTextStep, handleSellMedia, handleSellFlowSubmission, STEPS };
+async function showMainMenu(sock, jid, user) {
+  clearSession(jid);
+  setSession(jid, 'main_menu');
+  await sendButtonMenu(
+    sock, jid,
+    `Hi *${user.name}*! What would you like to do?`,
+    MAIN_OPTIONS.map((opt, i) => ({ id: String(i + 1), label: opt.label })),
+    'You can also just type the number (1-5).'
+  );
+}
+
+async function handleMainMenuChoice(sock, jid, idx, user) {
+  if (idx === 0) return startBuyFlow(sock, jid, user, 0);
+  if (idx === 1) return require('./sell').startSellFlow(sock, jid, user);
+  if (idx === 2) return showMyListings(sock, jid, user);
+  if (idx === 3) return require('./upgrade').startUpgradeFlow(sock, jid, user);
+  if (idx === 4) return showHelp(sock, jid);
+}
+
+const PAGE_SIZE = 5;
+
+async function startBuyFlow(sock, jid, user, page = 0) {
+  const products = await productRepo.getActiveProducts(page * PAGE_SIZE, PAGE_SIZE);
+
+  if (products.length === 0 && page === 0) {
+    setSession(jid, 'main_menu');
+    return sock.sendMessage(jid, { text: '📭 No items available right now. Check back soon!' });
+  }
+  if (products.length === 0) {
+    return sock.sendMessage(jid, { text: '📭 No more items. Reply *0* to go back to the first page.' });
+  }
+
+  updateSession(jid, { buyPage: page, buyProductIds: products.map(p => p.id) });
+  setSession(jid, 'browsing');
+
+  // List message: each item is a row (id = its position, matching the old
+  // numbered-reply convention so handleBrowsingChoice needs no changes),
+  // with price/location as the row description. Pagination controls live
+  // in their own section so they're always visible without eating into the
+  // 10-row item limit unnecessarily.
+  const itemRows = products.map((p, i) => ({
+    id: String(i + 1),
+    title: `${p.is_premium ? '💎 ' : ''}${p.name}`,
+    description: `₦${Number(p.selling_price).toLocaleString()} — ${p.city || p.state || 'N/A'}`
+  }));
+
+  const navRows = [{ id: '9', title: '➡️ Next page' }];
+  if (page > 0) navRows.unshift({ id: '0', title: '⬅️ Previous page' });
+  else navRows.push({ id: '0', title: '↩️ Back to menu' });
+
+  const sections = [{ title: `Page ${page + 1}`, rows: itemRows }];
+  if (itemRows.length + navRows.length <= 10) sections.push({ title: 'Navigate', rows: navRows });
+
+  await sendListMenu(
+    sock, jid,
+    `🛍️ *Available Items* (page ${page + 1})`,
+    sections,
+    { buttonText: 'View items' }
+  );
+}
+
+async function handleBrowsingChoice(sock, jid, text, user) {
+  const session = getSession(jid);
+  const ids = (session && session.data && session.data.buyProductIds) || [];
+  const page = (session && session.data && session.data.buyPage) || 0;
+
+  const trimmed = (text || '').trim();
+  if (trimmed === '9') return startBuyFlow(sock, jid, user, page + 1);
+  if (trimmed === '0' && page > 0) return startBuyFlow(sock, jid, user, page - 1);
+  if (trimmed === '0' && page === 0) return showMainMenu(sock, jid, user);
+
+  const n = parseInt(trimmed, 10);
+  if (isNaN(n) || n < 1 || n > ids.length) {
+    return sock.sendMessage(jid, { text: '❌ Invalid choice. Reply with a listed number, *9* for next, or *0* to go back.' });
+  }
+
+  const product = await productRepo.getProductById(ids[n - 1]);
+  if (!product) return sock.sendMessage(jid, { text: '❌ That item is no longer available.' });
+  await sendProductCard(sock, jid, product, user);
+}
+
+async function sendProductCard(sock, jid, product, user) {
+  const caption =
+    `${product.is_premium ? '💎 *PRO LISTING*\n' : ''}` +
+    `📦 *${product.name}*\n` +
+    `💰 ₦${Number(product.selling_price).toLocaleString()}${product.negotiable ? ' (negotiable)' : ''}\n` +
+    `⚙️ Condition: ${product.condition || 'N/A'}\n` +
+    `📝 ${product.description || 'No description'}\n` +
+    `📍 ${product.city || ''}, ${product.state || ''}\n` +
+    `🚚 Dropoff: ${product.door_dropoff ? 'Yes' : 'No'} | 🚶 Pickup: ${product.door_pickup ? 'Yes' : 'No'}`;
+
+  const firstMedia = Array.isArray(product.media) && product.media[0];
+  const buttons = [{ id: '1', title: '💬 Contact Seller' }, { id: '0', title: '⬅️ Back' }];
+
+  // sendButtons handles its own fallback chain internally (interactive ->
+  // image+text -> plain text), so a single call covers the whole card.
+  await sendButtons(sock, jid, caption, buttons, {
+    header: firstMedia && firstMedia.type === 'photo' ? { type: 'image', link: firstMedia.url } : undefined
+  });
+
+  setSession(jid, 'viewing_product');
+  updateSession(jid, { viewingProductId: product.id });
+}
+
+async function handleViewingProductChoice(sock, jid, text, user) {
+  const session = getSession(jid);
+  const productId = session && session.data && session.data.viewingProductId;
+  const trimmed = (text || '').trim();
+
+  if (trimmed === '0') return startBuyFlow(sock, jid, user, (session.data.buyPage) || 0);
+  if (trimmed === '1' && productId) {
+    const product = await productRepo.getProductById(productId);
+    if (!product) return sock.sendMessage(jid, { text: '❌ Item no longer available.' });
+
+    const sellerJid = product.seller_whatsapp
+      ? `${product.seller_whatsapp.replace(/\D/g, '')}@s.whatsapp.net`
+      : `${process.env.ADMIN_WHATSAPP}@s.whatsapp.net`;
+
+    const introMsg =
+      `🛍️ *New Buyer Interest — CampusMarketplace*\n\n` +
+      `📦 Item: ${product.name}\n` +
+      `👤 Buyer: ${user.name} (${user.phone})\n` +
+      `📧 Email: ${user.email}\n\n` +
+      `They'd like to discuss this item with you. Reply to this chat or contact them directly.`;
+
+    await sock.sendMessage(sellerJid, { text: introMsg }).catch(() => {});
+    await sock.sendMessage(jid, {
+      text: `✅ Done! I've notified the seller — they (or our admin) will reach out to you directly on WhatsApp shortly.\n\nReply *0* to keep browsing.`
+    });
+    return;
+  }
+  return sock.sendMessage(jid, { text: '❌ Invalid choice. Reply *1* to contact seller or *0* to go back.' });
+}
+
+async function showMyListings(sock, jid, user) {
+  const products = await productRepo.getProductsBySellerPhone(user.phone);
+  if (products.length === 0) {
+    setSession(jid, 'main_menu');
+    return sock.sendMessage(jid, { text: '📭 You have no listings yet. Reply *2* from the main menu to sell an item.' });
+  }
+  let msg = `📋 *Your Listings*\n\n`;
+  products.forEach(p => {
+    msg += `• ${p.name} — ₦${Number(p.selling_price).toLocaleString()} [${p.status.toUpperCase()}]\n🆔 ${p.id}\n\n`;
+  });
+  msg += `Reply *menu* to return, or *4* from the main menu to upgrade one of these to Pro.`;
+  setSession(jid, 'main_menu');
+  await sock.sendMessage(jid, { text: msg });
+}
+
+async function showHelp(sock, jid) {
+  setSession(jid, 'main_menu');
+  const body =
+    `❓ *Help*\n\n` +
+    `Type *menu* anytime to return to the main menu.\n` +
+    `Type *cancel* anytime to cancel what you're doing.`;
+
+  const adminPhone = (process.env.ADMIN_WHATSAPP || '').replace(/\D/g, '');
+  if (adminPhone) {
+    return sendCtaUrl(sock, jid, body, '💬 Chat with Support', `https://wa.me/${adminPhone}`);
+  }
+  await sock.sendMessage(jid, { text: `${body}\n\nFor direct support, message our team.` });
+}
+
+module.exports = {
+  askName, handleNameInput, handleEmailInput,
+  showMainMenu, handleMainMenuChoice, startBuyFlow, handleBrowsingChoice,
+  handleViewingProductChoice, showMyListings, showHelp, MAIN_OPTIONS
+};
