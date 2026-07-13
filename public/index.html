@@ -58,15 +58,6 @@
     </div>
   </div>
 
-  <div class="card" id="linkCard">
-    <h2>Link WhatsApp</h2>
-    <p class="muted">Enter the number the bot should run on (country code, no +). Use a dedicated SIM, not your main number.</p>
-    <input id="phoneInput" type="tel" placeholder="2348012345678" />
-    <button id="linkBtn" onclick="requestCode()">Get Pairing Code</button>
-    <div id="codeBox" class="code-box" style="display:none;"></div>
-    <div id="linkMsg" class="msg"></div>
-  </div>
-
   <div class="card">
     <h2>Quick Stats</h2>
     <div class="stats-grid">
@@ -88,12 +79,10 @@ async function refreshStatus() {
     dot.className = 'dot ' + data.status;
     if (data.status === 'open') {
       text.textContent = '✅ Connected';
-      document.getElementById('linkCard').style.display = 'none';
     } else if (data.status === 'connecting') {
       text.textContent = '🟡 Connecting...';
     } else {
       text.textContent = '🔴 Not connected';
-      document.getElementById('linkCard').style.display = 'block';
     }
     meta.textContent = data.phone ? `Number: ${data.phone} · Updated ${new Date(data.updatedAt).toLocaleString()}` : `Updated ${new Date(data.updatedAt).toLocaleString()}`;
   } catch (e) {}
@@ -108,46 +97,6 @@ async function refreshStats() {
     document.getElementById('statReceipts').textContent = data.pendingReceipts;
     document.getElementById('statUsers').textContent = data.totalUsers;
   } catch (e) {}
-}
-
-async function requestCode() {
-  const phone = document.getElementById('phoneInput').value.trim();
-  const msg = document.getElementById('linkMsg');
-  const btn = document.getElementById('linkBtn');
-  msg.textContent = '';
-  msg.className = 'msg';
-  if (!/^\d{10,15}$/.test(phone)) {
-    msg.textContent = 'Enter digits only, with country code, no +.';
-    msg.className = 'msg err';
-    return;
-  }
-  btn.disabled = true;
-  btn.textContent = 'Requesting...';
-  try {
-    const res = await fetch('/api/link', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone })
-    });
-    const data = await res.json();
-    if (data.alreadyLinked) {
-      msg.textContent = 'Already linked!';
-      msg.className = 'msg ok';
-    } else if (data.code) {
-      document.getElementById('codeBox').style.display = 'block';
-      document.getElementById('codeBox').textContent = data.code;
-      msg.textContent = 'Open WhatsApp > Linked Devices > Link with phone number, and enter this code.';
-      msg.className = 'msg ok';
-    } else {
-      msg.textContent = data.error || 'Something went wrong.';
-      msg.className = 'msg err';
-    }
-  } catch (e) {
-    msg.textContent = 'Request failed. Try again.';
-    msg.className = 'msg err';
-  }
-  btn.disabled = false;
-  btn.textContent = 'Get Pairing Code';
 }
 
 refreshStatus();
