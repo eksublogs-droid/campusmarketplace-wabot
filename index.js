@@ -9,6 +9,9 @@ const botStatus = require('./utils/botStatus');
 
 const userRepo = require('./repos/userRepo');
 const statsRepo = require('./repos/statsRepo');
+const productRepo = require('./repos/productRepo');
+const multer = require('multer');
+const uploadNone = multer();
 
 const {
   askName, handleNameInput, handleEmailInput,
@@ -309,6 +312,70 @@ ${err.validationErrors ? JSON.stringify(err.validationErrors, null, 2) : ''}
 });
 
 const supabase = require('./utils/supabaseClient');
+
+// Receives submissions from public/sell-form.html (the mobile-friendly
+// "one page, all fields" listing form). userId is the WhatsApp phone
+// number passed in the form's URL (?userId=<phone>). Photos/videos are
+// uploaded separately by the form to Telegram's existing media storage
+// before this runs — we only receive their file_id + type here, not the
+// actual files. See earlier chat note: media.url vs media.file_id is an
+// open question for buyer-side image display and may need revisiting.
+app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
+  try {
+    const b = req.body;
+    const phone = (b.userId || '').trim();
+    if (!phone) return res.status(400).json({ error: 'Missing userId' });
+
+    let media = [];
+    try { media = JSON.parse(b.preuploadedMedia || '[]'); } catch (_) { media = []; }
+
+    const sellingPrice = parseInt(String(b.sellingPrice || '').replace(/[^\d]/g, ''), 10);
+    if (!b.itemTitle || !sellingPrice) {
+      return res.status(400).json({ error: 'Missing required fields (itemTitle, sellingPrice)' });
+    }
+
+    const product = await productRepo.createProduct({
+      name: b.itemTitle,
+      category: b.category,
+      condition: b.condition,
+      selling_price: sellingPrice,
+      description: b.description || '',
+      state: b.state,
+      city: b.city,
+      seller_whatsapp: phone,
+      media,
+      posted_by: 'user',
+      status: 'pending'
+    });
+
+    const adminJid = `${process.env.ADMIN_WHATSAPP}@s.whatsapp.net`;
+    const notifyText =
+      `🆕 *New Listing Pending Review*\n\n` +
+      `📦 ${product.name}\n💰 ₦${Number(product.selling_price).toLocaleString()}\n📍 ${product.city}, ${product.state}\n` +
+      `👤 Seller: ${phone}`;
+
+    await waCloudApi.sendMessage(`${phone}@s.whatsapp.net`, {
+      text: `✅ *Listing submitted for review!*\n\n📦 ${product.name}\n💰 ₦${Number(product.selling_price).toLocaleString()}\n\nOur team will review it shortly.`
+    }).catch(() => {});
+
+    await waCloudApi.sendMessage(adminJid, {
+      buttons: {
+        body: notifyText,
+        footer: 'Tap to review, or type the command manually.',
+        buttons: [
+          { id: `approve ${product.id}`, title: '✅ Approve' },
+          { id: `reject ${product.id}`, title: '❌ Reject' }
+        ]
+      }
+    }).catch(() => {});
+
+    res.json({ ok: true, productId: product.id });
+    clearSession(`${phone}@s.whatsapp.net`);
+  } catch (err) {
+    console.error('submit-listing error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 async function boot() {
   const { error } = await supabase.from('settings').select('id').limit(1);
