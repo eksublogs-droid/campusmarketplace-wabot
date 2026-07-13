@@ -142,7 +142,7 @@ async function sendCtaUrl(sock, jid, bodyText, displayText, url, opts = {}) {
   const { footer, header } = opts;
   try {
     return await sock.sendMessage(jid, {
-      cta_url: { body: bodyText, footer, header, displayText, url }
+      cta_url: { body: bodyText, footer, header, displayText: truncate(displayText, MAX_BUTTON_TITLE), url }
     });
   } catch (err) {
     console.error('sendCtaUrl failed, falling back to text:', err.message);
