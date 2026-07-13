@@ -260,8 +260,26 @@ async function connectToWhatsApp() {
       const boomError = new Boom(lastDisconnect?.error);
       const statusCode = boomError?.output?.statusCode;
       const reasonName = DISCONNECT_REASON_NAMES[statusCode] || 'unknown';
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      console.log(`Connection closed. statusCode: ${statusCode} (${reasonName}). message: ${boomError.message}. Reconnecting: ${shouldReconnect}`);
+      // FIX (root cause of the pair -> "connected" -> disconnect -> "Couldn't
+      // link device" spiral): statusCode 401 does NOT always mean the saved
+      // credentials are invalid. WhatsApp also sends 401 with the message
+      // "Stream Errored (conflict)" when a SECOND live connection is using
+      // the exact same session at the same moment — the creds themselves
+      // are still perfectly valid. The old code treated every 401 as a
+      // permanent logout and wiped the session, which turned a transient
+      // conflict into a forced full re-pair every single time, and once
+      // that starts happening back-to-back it looks exactly like the
+      // symptom reported: brief "connected", then dead, then eventually the
+      // phone itself starts refusing with "Couldn't link device" because it
+      // keeps getting invalidated mid-handshake. Now only a 401 WITHOUT the
+      // conflict wording is treated as a real logout; a conflict 401 just
+      // reconnects like any other drop, creds intact. If conflicts keep
+      // happening, the real fix is making sure only ONE process is ever
+      // connecting with this session (check Railway for >1 replica or an
+      // old deployment still running alongside the current one).
+      const isConflict = /conflict/i.test(boomError.message || '');
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut || isConflict;
+      console.log(`Connection closed. statusCode: ${statusCode} (${reasonName}). message: ${boomError.message}. Reconnecting: ${shouldReconnect}${isConflict ? ' (conflict — NOT wiping creds, another connection collided with this session)' : ''}`);
       await botStatus.setStatus('close');
       if (shouldReconnect) {
         // Make sure any in-flight creds write (e.g. from a just-issued
