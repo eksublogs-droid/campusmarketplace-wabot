@@ -37,6 +37,15 @@ app.use(express.static(__dirname + '/public'));
 
 let sock;
 let pairingInFlight = false;
+// FIX (root cause of repeated disconnects on every redeploy): Railway starts
+// the new container before killing the old one (zero-downtime deploy), and
+// with no shutdown handler, the old container used to get killed instantly
+// mid-connection. That left two containers briefly holding the same
+// WhatsApp session at once, which WhatsApp treats as a conflict and force
+// logs-out (401) — which then wiped the saved session entirely. This flag
+// lets the shutdown handler below tell the old container to close its
+// socket cleanly BEFORE it's killed, so there's never an overlap.
+let isShuttingDown = false;
 
 const BASE_RECONNECT_DELAY_MS = 3000;
 const MAX_RECONNECT_DELAY_MS = 60000;
@@ -143,6 +152,7 @@ async function connectToWhatsApp() {
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, isNewLogin } = update;
+    if (isShuttingDown) return; // intentional shutdown in progress, not a real disconnect
     if (connection === 'close') {
       const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
@@ -218,7 +228,7 @@ async function connectToWhatsApp() {
     try {
       await handleIncomingMessage(msg);
     } catch (err) {
-      console.error('Message handling error:', err);
+      console.error('Message handling error:', err instanceof Error ? err.message : err);
     }
   });
 
@@ -265,6 +275,7 @@ async function handleIncomingMessage(msg) {
 
   const jid = msg.key.remoteJid;
   if (jid.endsWith('@g.us')) return; // ignore groups
+  if (jid === 'status@broadcast') return; // ignore WhatsApp Status updates
   const phone = jid.replace('@s.whatsapp.net', '');
   const text = extractText(msg).trim();
 
@@ -434,6 +445,44 @@ async function boot() {
 
 boot();
 
+// FIX: previously logged the raw `reason` object directly. If an unhandled
+// rejection came from an internal Signal Protocol session/decryption error
+// (which some libraries reject with the raw session object attached, not a
+// plain Error), that dumped actual private key material into Railway's
+// logs in plain text — a real secret exposure, independent of whatever
+// caused the rejection. Now only safe string fields are ever logged.
 process.on('unhandledRejection', (reason) => {
-  console.error('Unhandled Rejection:', reason);
+  if (reason instanceof Error) {
+    console.error('Unhandled Rejection:', reason.message);
+  } else {
+    console.error('Unhandled Rejection (non-Error reason, type:', typeof reason, ')');
+  }
 });
+
+// FIX: close the WhatsApp socket cleanly before this process exits, instead
+// of letting Railway kill it instantly mid-connection on every redeploy.
+// Without this, the new container could open its own connection using the
+// same saved session while the old one was still holding it open —
+// WhatsApp treats that as a conflict and force-logs-out the session (401),
+// which then wiped the saved credentials and required a full re-pair.
+// This removes that overlap window entirely.
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`${signal} received — closing WhatsApp socket cleanly before exit.`);
+  try {
+    if (sock) {
+      sock.ev.removeAllListeners('connection.update');
+      sock.end(undefined);
+    }
+  } catch (err) {
+    console.error('Error while closing socket on shutdown:', err.message);
+  }
+  // Brief pause so the close frame actually reaches WhatsApp's servers
+  // before the process is killed, rather than exiting instantly.
+  await delay(1000);
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
