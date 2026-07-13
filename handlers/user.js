@@ -3,6 +3,7 @@ const productRepo = require('../repos/productRepo');
 const { setSession, updateSession, getSession, clearSession } = require('../utils/session');
 const { buildMenu } = require('../utils/menu');
 const { sendButtonMenu } = require('../utils/buttons');
+const { sendListMenu, sendButtons, sendCtaUrl } = require('../utils/interactive');
 const { sendLikeHuman, pickVariant } = require('../utils/humanize');
 
 const MAIN_OPTIONS = [
@@ -80,14 +81,30 @@ async function startBuyFlow(sock, jid, user, page = 0) {
   updateSession(jid, { buyPage: page, buyProductIds: products.map(p => p.id) });
   setSession(jid, 'browsing');
 
-  let msg = `🛍️ *Available Items* (page ${page + 1})\n\n`;
-  products.forEach((p, i) => {
-    msg += `${i + 1}️⃣ ${p.is_premium ? '💎 ' : ''}${p.name} — ₦${Number(p.selling_price).toLocaleString()}\n`;
-    msg += `   📍 ${p.city || p.state || 'N/A'}\n\n`;
-  });
-  msg += `Reply with a number to view details.\nReply *9* for next page${page > 0 ? ', *0* for previous page' : ''}.`;
+  // List message: each item is a row (id = its position, matching the old
+  // numbered-reply convention so handleBrowsingChoice needs no changes),
+  // with price/location as the row description. Pagination controls live
+  // in their own section so they're always visible without eating into the
+  // 10-row item limit unnecessarily.
+  const itemRows = products.map((p, i) => ({
+    id: String(i + 1),
+    title: `${p.is_premium ? '💎 ' : ''}${p.name}`,
+    description: `₦${Number(p.selling_price).toLocaleString()} — ${p.city || p.state || 'N/A'}`
+  }));
 
-  await sock.sendMessage(jid, { text: msg });
+  const navRows = [{ id: '9', title: '➡️ Next page' }];
+  if (page > 0) navRows.unshift({ id: '0', title: '⬅️ Previous page' });
+  else navRows.push({ id: '0', title: '↩️ Back to menu' });
+
+  const sections = [{ title: `Page ${page + 1}`, rows: itemRows }];
+  if (itemRows.length + navRows.length <= 10) sections.push({ title: 'Navigate', rows: navRows });
+
+  await sendListMenu(
+    sock, jid,
+    `🛍️ *Available Items* (page ${page + 1})`,
+    sections,
+    { buttonText: 'View items' }
+  );
 }
 
 async function handleBrowsingChoice(sock, jid, text, user) {
@@ -111,7 +128,7 @@ async function handleBrowsingChoice(sock, jid, text, user) {
 }
 
 async function sendProductCard(sock, jid, product, user) {
-  let caption =
+  const caption =
     `${product.is_premium ? '💎 *PRO LISTING*\n' : ''}` +
     `📦 *${product.name}*\n` +
     `💰 ₦${Number(product.selling_price).toLocaleString()}${product.negotiable ? ' (negotiable)' : ''}\n` +
@@ -121,18 +138,13 @@ async function sendProductCard(sock, jid, product, user) {
     `🚚 Dropoff: ${product.door_dropoff ? 'Yes' : 'No'} | 🚶 Pickup: ${product.door_pickup ? 'Yes' : 'No'}`;
 
   const firstMedia = Array.isArray(product.media) && product.media[0];
-  caption += '\n\n1️⃣ 💬 Contact Seller\n0️⃣ ⬅️ Back';
+  const buttons = [{ id: '1', title: '💬 Contact Seller' }, { id: '0', title: '⬅️ Back' }];
 
-  try {
-    if (firstMedia && firstMedia.type === 'photo') {
-      await sock.sendMessage(jid, { image: { url: firstMedia.url }, caption });
-    } else {
-      await sock.sendMessage(jid, { text: caption });
-    }
-  } catch (err) {
-    console.error('Product card send failed, falling back to text:', err.message);
-    await sock.sendMessage(jid, { text: caption });
-  }
+  // sendButtons handles its own fallback chain internally (interactive ->
+  // image+text -> plain text), so a single call covers the whole card.
+  await sendButtons(sock, jid, caption, buttons, {
+    header: firstMedia && firstMedia.type === 'photo' ? { type: 'image', link: firstMedia.url } : undefined
+  });
 
   setSession(jid, 'viewing_product');
   updateSession(jid, { viewingProductId: product.id });
@@ -185,13 +197,16 @@ async function showMyListings(sock, jid, user) {
 
 async function showHelp(sock, jid) {
   setSession(jid, 'main_menu');
-  await sock.sendMessage(jid, {
-    text:
-      `❓ *Help*\n\n` +
-      `Type *menu* anytime to return to the main menu.\n` +
-      `Type *cancel* anytime to cancel what you're doing.\n\n` +
-      `For direct support, message our team.`
-  });
+  const body =
+    `❓ *Help*\n\n` +
+    `Type *menu* anytime to return to the main menu.\n` +
+    `Type *cancel* anytime to cancel what you're doing.`;
+
+  const adminPhone = (process.env.ADMIN_WHATSAPP || '').replace(/\D/g, '');
+  if (adminPhone) {
+    return sendCtaUrl(sock, jid, body, '💬 Chat with Support', `https://wa.me/${adminPhone}`);
+  }
+  await sock.sendMessage(jid, { text: `${body}\n\nFor direct support, message our team.` });
 }
 
 module.exports = {
