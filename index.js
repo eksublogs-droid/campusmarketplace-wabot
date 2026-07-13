@@ -235,15 +235,19 @@ app.get('/admin', (req, res) => {
   res.sendFile(__dirname + '/public/admin.html');
 });
 
-// Protected by ADMIN_PANEL_KEY env var, sent as an 'x-admin-key' header —
-// keeps the password out of the URL/browser history, unlike a query param.
+// Protected by ADMIN_PANEL_KEY env var, normally sent as an 'x-admin-key'
+// header (keeps the password out of the URL/browser history). Also accepts
+// ?key= as a query param, purely so routes meant to be visited directly
+// from a phone browser (e.g. /api/admin/sync-flow) work without needing
+// custom headers — existing header-based calls are unaffected.
 function checkAdminKey(req, res) {
   const expected = process.env.ADMIN_PANEL_KEY;
   if (!expected) {
     res.status(500).json({ error: 'ADMIN_PANEL_KEY not set on the server' });
     return false;
   }
-  if (req.headers['x-admin-key'] !== expected) {
+  const provided = req.headers['x-admin-key'] || req.query.key;
+  if (provided !== expected) {
     res.status(401).json({ error: 'Unauthorized' });
     return false;
   }
@@ -267,6 +271,40 @@ app.delete('/api/admin/users/:phone', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Syncs flows/sell-item-flow.json to Meta as a published WhatsApp Flow.
+// Visit from your phone browser: /api/admin/sync-flow?key=YOUR_ADMIN_PANEL_KEY
+const { syncFlow } = require('./flows/syncFlowCore');
+const fs = require('fs');
+const path = require('path');
+
+app.get('/api/admin/sync-flow', async (req, res) => {
+  if (!checkAdminKey(req, res)) return;
+  try {
+    const jsonPath = path.join(__dirname, 'flows', 'sell-item-flow.json');
+    const flowJson = fs.readFileSync(jsonPath, 'utf8');
+    JSON.parse(flowJson); // fail fast if the JSON on disk is broken
+
+    const result = await syncFlow({
+      token: process.env.WA_ACCESS_TOKEN,
+      wabaId: process.env.WA_WABA_ID,
+      flowJson,
+      name: 'Sell an Item'
+    });
+
+    res.send(`<pre style="font-family:monospace;white-space:pre-wrap;padding:16px;line-height:1.5;">
+${result.log.join('\n')}
+
+Add this to your .env:
+WA_SELL_FLOW_ID=${result.flowId}
+</pre>`);
+  } catch (err) {
+    res.status(500).send(`<pre style="font-family:monospace;white-space:pre-wrap;padding:16px;color:#b00020;line-height:1.5;">
+❌ ${err.message}
+${err.validationErrors ? JSON.stringify(err.validationErrors, null, 2) : ''}
+</pre>`);
   }
 });
 
