@@ -15,7 +15,7 @@ const {
   showMainMenu, handleMainMenuChoice, handleBrowsingChoice,
   handleViewingProductChoice, MAIN_OPTIONS
 } = require('./handlers/user');
-const { handleSellTextStep, handleSellMedia } = require('./handlers/sell');
+const { handleSellTextStep, handleSellMedia, handleSellFlowSubmission } = require('./handlers/sell');
 const {
   handleUpgradeSelectProduct, handleUpgradeSelectDays, handleUpgradeReceiptMedia
 } = require('./handlers/upgrade');
@@ -58,6 +58,10 @@ function extractText(message) {
   if (message.type === 'text') return message.text?.body || '';
   if (message.type === 'button') return message.button?.text || message.button?.payload || '';
   if (message.type === 'interactive') {
+    // Button/list replies carry the same `id` the numbered-text flow always
+    // used, so they route through every existing handler/menu parser
+    // unchanged. Flow submissions (nfm_reply) have no single "id" — those
+    // are handled separately in handleIncomingMessage via extractFlowReply().
     return (
       message.interactive?.button_reply?.id ||
       message.interactive?.list_reply?.id ||
@@ -67,6 +71,20 @@ function extractText(message) {
   if (message.type === 'image') return message.image?.caption || '';
   if (message.type === 'video') return message.video?.caption || '';
   return '';
+}
+
+// A completed WhatsApp Flow submission arrives as an interactive message of
+// subtype `nfm_reply`, with the form's answers JSON-encoded as a string.
+// Returns the parsed object, or null if this message isn't a flow reply.
+function extractFlowReply(message) {
+  const raw = message.interactive?.nfm_reply?.response_json;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('Failed to parse flow response_json:', err.message);
+    return null;
+  }
 }
 
 function mimeTypeOf(message) {
@@ -100,6 +118,21 @@ async function handleIncomingMessage(message) {
   if (!user.email_submitted) return handleEmailInput(sock, jid, text, user);
 
   const session = getSession(jid);
+
+  // ===== WhatsApp Flow submissions =====
+  // Only meaningful if a handler actually launched a Flow (see
+  // handlers/sell.js startSellFlow) and is waiting on it — if a flow reply
+  // shows up with no matching session state, it's ignored rather than
+  // crashing the pipeline.
+  if (message.type === 'interactive') {
+    const flowData = extractFlowReply(message);
+    if (flowData) {
+      if (session && session.step === 'sell_flow_pending') {
+        return handleSellFlowSubmission(sock, jid, flowData, user);
+      }
+      return; // stray/expired flow reply, nothing to do
+    }
+  }
 
   // ===== media (photos/videos) =====
   if (message.type === 'image' || message.type === 'video') {
