@@ -52,7 +52,17 @@ async function sendLikeHuman(sock, jid, text) {
   try {
     await sock.sendPresenceUpdate('paused', jid);
   } catch (_) {}
-  await sock.sendMessage(jid, { text });
+
+  // FIX: this used to call the already-humanized sock.sendMessage here,
+  // which stacked a SECOND composing→wait→paused cycle on top of the one
+  // just done above (index.js wraps sendMessage globally for every reply).
+  // A stranger's very first message showed two separate typing pauses
+  // back to back instead of one. index.js exposes the original, unwrapped
+  // send as sock.sendMessageRaw specifically so this function can call it
+  // directly and skip the second cycle. Falls back to sock.sendMessage if
+  // that's ever missing (e.g. older index.js) so this never hard-fails.
+  const send = sock.sendMessageRaw || sock.sendMessage;
+  await send(jid, { text });
 }
 
 module.exports = { sendLikeHuman, pickVariant };
