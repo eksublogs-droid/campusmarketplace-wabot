@@ -14,8 +14,8 @@
 // triggering restriction). This staggers them by a small fixed minimum,
 // invisible to any individual user, without meaningfully delaying anyone.
 
-const MIN_DELAY_MS = 2500;
-const MAX_DELAY_MS = 6000;
+const MIN_DELAY_MS = 800;
+const MAX_DELAY_MS = 1500;
 const MIN_GAP_BETWEEN_SENDS_MS = 1500;
 
 let lastSendAt = 0;
