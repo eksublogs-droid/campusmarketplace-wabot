@@ -3,6 +3,9 @@ const settingsRepo = require('../repos/settingsRepo');
 const paymentRepo = require('../repos/paymentRepo');
 const { setSession, updateSession, getSession, clearSession } = require('../utils/session');
 const { uploadBuffer } = require('../utils/media');
+const { sendSmartMenu } = require('../utils/interactive');
+
+const COMMON_DAY_CHOICES = [7, 14, 30];
 
 // Step 1: show the user their own listings, ask which to upgrade
 async function startUpgradeFlow(sock, jid, user) {
@@ -14,15 +17,22 @@ async function startUpgradeFlow(sock, jid, user) {
     return sock.sendMessage(jid, { text: '📭 You have no active listings eligible for a Pro upgrade right now.' });
   }
 
-  let msg = `💎 *Upgrade a Listing to Pro*\n\nPro listings are pinned to the top of Buy results.\n\n`;
-  eligible.forEach((p, i) => {
-    msg += `${i + 1}️⃣ ${p.name} — ₦${Number(p.selling_price).toLocaleString()}\n`;
-  });
-  msg += `\nReply with a number to choose, or *0* to cancel.`;
-
   updateSession(jid, { upgradeProductIds: eligible.map(p => p.id) });
   setSession(jid, 'upgrade_select_product');
-  await sock.sendMessage(jid, { text: msg });
+
+  const options = eligible.map((p, i) => ({
+    id: String(i + 1),
+    label: p.name,
+    description: `₦${Number(p.selling_price).toLocaleString()}`
+  }));
+  options.push({ id: '0', label: '⬅️ Cancel' });
+
+  await sendSmartMenu(
+    sock, jid,
+    `💎 *Upgrade a Listing to Pro*\n\nPro listings are pinned to the top of Buy results. Pick one:`,
+    options,
+    { listTitle: 'Your listings', buttonText: 'Select listing' }
+  );
 }
 
 async function handleUpgradeSelectProduct(sock, jid, text, user) {
@@ -42,7 +52,13 @@ async function handleUpgradeSelectProduct(sock, jid, text, user) {
 
   updateSession(jid, { upgradeProductId: ids[n - 1] });
   setSession(jid, 'upgrade_select_days');
-  await sock.sendMessage(jid, { text: '📅 How many days should it stay pinned? (e.g. 7, 14, 30):' });
+
+  await sendSmartMenu(
+    sock, jid,
+    '📅 How many days should it stay pinned?',
+    COMMON_DAY_CHOICES.map(d => ({ id: String(d), label: `${d} days` })),
+    { footer: 'Or type any other number of days.' }
+  );
 }
 
 async function handleUpgradeSelectDays(sock, jid, text, user) {
@@ -64,7 +80,7 @@ async function handleUpgradeSelectDays(sock, jid, text, user) {
   }
 
   setSession(jid, 'upgrade_awaiting_receipt');
-  await sock.sendMessage(sock ? jid : jid, {
+  await sock.sendMessage(jid, {
     text:
       `💰 *${days} day(s) Pro listing = ₦${amount.toLocaleString()}*\n\n` +
       `Please transfer the exact amount to:\n\n${bankMsg}` +
@@ -99,14 +115,24 @@ async function handleUpgradeReceiptMedia(sock, jid, buffer, mimeType, user) {
 
     const product = await productRepo.getProductById(productId);
     const adminJid = `${process.env.ADMIN_WHATSAPP}@s.whatsapp.net`;
+    const caption =
+      `🧾 *Payment Receipt — Pro Upgrade*\n\n` +
+      `📦 ${product ? product.name : productId}\n` +
+      `📅 ${days} day(s) — ₦${Number(amount).toLocaleString()}\n` +
+      `👤 ${user.name} (${user.phone})`;
+
+    // Send the receipt image, then a compact button prompt for the admin
+    // (an image message can't carry interactive buttons itself). Button ids
+    // are the exact text commands handlers/admin.js already parses.
+    await sock.sendMessage(adminJid, { image: { url }, caption }).catch(() => {});
     await sock.sendMessage(adminJid, {
-      image: { url },
-      caption:
-        `🧾 *Payment Receipt — Pro Upgrade*\n\n` +
-        `📦 ${product ? product.name : productId}\n` +
-        `📅 ${days} day(s) — ₦${Number(amount).toLocaleString()}\n` +
-        `👤 ${user.name} (${user.phone})\n\n` +
-        `Reply *approve receipt ${receipt.id}* or *reject receipt ${receipt.id} [reason]*`
+      buttons: {
+        body: 'Review this payment receipt:',
+        buttons: [
+          { id: `approve receipt ${receipt.id}`, title: '✅ Approve' },
+          { id: `reject receipt ${receipt.id}`, title: '❌ Reject' }
+        ]
+      }
     }).catch(() => {});
   } catch (err) {
     console.error('Receipt upload error:', err.message);
