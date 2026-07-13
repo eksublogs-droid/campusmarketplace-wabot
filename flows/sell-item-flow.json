@@ -78,7 +78,7 @@
         "name": { "type": "string", "__example__": "" },
         "category": { "type": "string", "__example__": "" },
         "condition": { "type": "string", "__example__": "" },
-        "selling_price": { "type": "string", "__example__": "" },
+        "selling_price": { "type": "number", "__example__": 0 },
         "description": { "type": "string", "__example__": "" }
       },
       "layout": {
