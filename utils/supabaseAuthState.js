@@ -30,6 +30,26 @@ async function useSupabaseAuthState() {
     await supabase.from('auth_state').delete().neq('key', '');
   };
 
+  // FIX: Baileys emits `isNewLogin: true` as a one-off event the instant a
+  // pairing code is entered, on the socket that WhatsApp is about to force
+  // to restart (mandatory post-pair reconnect). That restart always builds
+  // a brand new socket, so nothing in memory survives to tell the NEXT
+  // socket "we just paired" when it opens. Persisting it here — in the
+  // same auth_state table everything else already uses, no schema change —
+  // is what lets that next socket still know. clearAll() above already
+  // wipes this key with everything else on a real logout, so it
+  // self-resets correctly with no extra handling needed.
+  const PAIRING_KEY = 'recent_pairing_at';
+
+  const markRecentPairing = async () => {
+    await writeData(PAIRING_KEY, { at: Date.now() });
+  };
+
+  const getRecentPairingAt = async () => {
+    const value = await readData(PAIRING_KEY);
+    return value && typeof value.at === 'number' ? value.at : null;
+  };
+
   const creds = (await readData('creds')) || initAuthCreds();
 
   // Baileys fires the 'creds.update' event (which calls saveCreds) but does
@@ -100,7 +120,13 @@ async function useSupabaseAuthState() {
     // Wipes all persisted auth data. Used to self-heal after WhatsApp
     // reports a real logged-out/invalid session, so the next boot starts
     // completely clean instead of retrying forever with dead credentials.
-    clearAll
+    clearAll,
+    // Call when the standalone `isNewLogin: true` event fires, to persist
+    // the moment of pairing outside the socket.
+    markRecentPairing,
+    // Returns the ms-epoch timestamp of the most recent pairing, or null
+    // if none is on record (or it was cleared by clearAll()).
+    getRecentPairingAt
   };
 }
 
