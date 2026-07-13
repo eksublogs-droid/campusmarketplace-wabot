@@ -1,19 +1,17 @@
 const supabase = require('./supabaseClient');
 
-// Tracks live connection state in memory (fast, always accurate while the
-// process is running) and mirrors the essentials into Supabase so the
-// dashboard can show "last known state" even right after a redeploy, before
-// the socket reconnects.
+// Tracks bot status in memory (fast, always accurate while the process is
+// running) and mirrors it into Supabase so the dashboard can show
+// "last known state" even right after a redeploy, before boot() finishes.
 let state = {
-  status: 'connecting', // 'connecting' | 'open' | 'close'
-  phone: null,
+  status: 'connecting', // 'connecting' | 'open'
   updatedAt: new Date().toISOString()
 };
 
-async function setStatus(status, phone) {
-  state = { status, phone: phone || state.phone, updatedAt: new Date().toISOString() };
+async function setStatus(status) {
+  state = { status, updatedAt: new Date().toISOString() };
   try {
-    await supabase.from('auth_state').upsert({ key: 'bot_status', value: state });
+    await supabase.from('bot_kv').upsert({ key: 'bot_status', value: state });
   } catch (err) {
     // Non-fatal: in-memory state above already updated; Supabase mirror can lag.
   }
@@ -23,10 +21,4 @@ async function getStatus() {
   return state;
 }
 
-async function loadPersistedStatus() {
-  const { data } = await supabase.from('auth_state').select('value').eq('key', 'bot_status').maybeSingle();
-  if (data && data.value) state = data.value;
-  return state;
-}
-
-module.exports = { setStatus, getStatus, loadPersistedStatus };
+module.exports = { setStatus, getStatus };
