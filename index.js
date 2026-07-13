@@ -270,6 +270,28 @@ async function connectToWhatsApp() {
         // reconnect can load stale keys and silently invalidate the code
         // the user is about to type in.
         await waitForPendingSave();
+
+        // FIX (root cause of "Linking device..." hanging forever on the
+        // phone, then a 401 shortly after): statusCode 515 (restartRequired)
+        // is not a real failure — it's WhatsApp's own mandatory restart that
+        // fires the instant a pairing code is entered. Baileys expects this
+        // socket to reconnect immediately. Previously this fell through to
+        // the same exponential backoff as ordinary disconnects below, which
+        // by the time a user actually entered a code had often already
+        // climbed to 50-70+ seconds (visible in logs as "Reconnecting in
+        // ~71s"). That left the phone showing a stuck linking spinner for
+        // the whole delay — long enough that WhatsApp invalidated the new
+        // session, producing the very next 401 (loggedOut) seen in the
+        // logs and wiping auth state right after a successful pair attempt.
+        // This restarts near-instantly instead, and does NOT count toward
+        // the escalating backoff below (it isn't a sign of real trouble).
+        if (statusCode === DisconnectReason.restartRequired) {
+          console.log('Restart required (expected right after pairing) — reconnecting immediately.');
+          await delay(250);
+          connectToWhatsApp();
+          return;
+        }
+
         // FIX: was a fixed 3s delay. If the connection is being killed
         // repeatedly in a tight loop, hammering WhatsApp's servers on a
         // fixed cadence looks more automated, not less. This backs off
@@ -520,7 +542,26 @@ app.post('/api/link', async (req, res) => {
 
   pairingInFlight = true;
   try {
-    const code = await sock.requestPairingCode(phone);
+    // FIX: the reconnect loop means `sock` can exist but momentarily have
+    // no live connection (e.g. mid-backoff after a disconnect). Clicking
+    // "Get Pairing Code" in that exact window previously failed outright
+    // with "Connection Closed" even though the socket reconnects on its
+    // own seconds later. This retries a couple of times before giving up,
+    // so a click that lands in a brief dead window still succeeds instead
+    // of forcing the user to notice the error and press the button again.
+    let code;
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        code = await sock.requestPairingCode(phone);
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (attempt < 2) await delay(2000);
+      }
+    }
+    if (lastErr) throw lastErr;
     await botStatus.setStatus('connecting', phone);
     res.json({ code });
   } catch (err) {
