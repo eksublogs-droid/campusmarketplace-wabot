@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
+<title>List Your Item — Campus Marketplace</title>
+<script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#0f0f0f;--surface:#1a1a1a;--border:#2e2e2e;--accent:#2563eb;
+    --accent-light:#3b82f6;--text:#f0f0f0;--muted:#888;--green:#16a34a;
+    --red:#dc2626;--radius:12px;--shadow:0 2px 8px rgba(0,0,0,.4)
+  }
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;padding-bottom:24px}
+  header{position:sticky;top:0;z-index:100;background:var(--bg);padding:14px 16px 8px;border-bottom:1px solid var(--border)}
+  header h1{font-size:17px;font-weight:700;color:var(--text)}
+  header p{font-size:12px;color:var(--muted);margin-top:2px}
+  .progress-bar{height:4px;background:var(--border);border-radius:2px;margin-top:10px;overflow:hidden}
+  .progress-fill{height:100%;background:var(--accent);transition:width .4s ease;border-radius:2px}
+  .progress-label{font-size:11px;color:var(--muted);margin-top:4px;text-align:right}
+  main{padding:16px}
+  .section{margin-bottom:32px}
+  .section-title{font-size:13px;font-weight:700;color:var(--accent-light);text-transform:uppercase;letter-spacing:.05em;margin-bottom:14px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+  .step{margin-bottom:20px}
+  .step-label{font-size:14px;font-weight:600;margin-bottom:6px;color:var(--text)}
+  .step-tip{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.5}
+  .step-explain{font-size:12px;color:#a0a0a0;line-height:1.6;background:rgba(255,255,255,.04);border-radius:8px;padding:10px 12px;margin-top:6px}
+  input,textarea{width:100%;background:var(--surface);border:1.5px solid var(--border);border-radius:var(--radius);padding:12px 14px;color:var(--text);font-size:15px;outline:none;transition:border-color .2s}
+  input:focus,textarea:focus{border-color:var(--accent)}
+  input::placeholder,textarea::placeholder{color:var(--muted)}
+  textarea{resize:vertical;min-height:90px}
+  .cards{display:grid;gap:8px}
+  .cards.two{grid-template-columns:1fr 1fr}
+  .cards.three{grid-template-columns:1fr 1fr 1fr}
+  .card{background:var(--surface);border:2px solid var(--border);border-radius:var(--radius);padding:12px 14px;cursor:pointer;transition:border-color .2s,background .2s;user-select:none}
+  .card:active{transform:scale(.97)}
+  .card.selected{border-color:var(--accent);background:rgba(37,99,235,.12)}
+  .card .card-name{font-size:14px;font-weight:600}
+  .card .card-sub{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.4}
+  .category-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+  .cat-card{background:var(--surface);border:2px solid var(--border);border-radius:var(--radius);padding:10px 12px;cursor:pointer;transition:border-color .2s;text-align:center}
+  .cat-card.selected{border-color:var(--accent);background:rgba(37,99,235,.12)}
+  .cat-card .icon{font-size:22px}
+  .cat-card .cname{font-size:13px;font-weight:600;margin-top:4px}
+  .sub-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .sub-card{background:var(--surface);border:2px solid var(--border);border-radius:var(--radius);padding:10px 12px;cursor:pointer;transition:border-color .2s;font-size:13px;font-weight:500;text-align:center}
+  .sub-card.selected{border-color:var(--accent);background:rgba(37,99,235,.12)}
+  .two-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .three-btns{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .tap-btn{background:var(--surface);border:2px solid var(--border);border-radius:var(--radius);padding:12px;cursor:pointer;font-size:14px;font-weight:500;text-align:center;color:var(--text);transition:border-color .2s;user-select:none}
+  .tap-btn.selected{border-color:var(--accent);background:rgba(37,99,235,.12)}
+  .tap-btn:active{transform:scale(.97)}
+  .field-reveal{margin-top:10px;display:none}
+  .field-reveal.show{display:block}
+  .upload-area{background:var(--surface);border:2px dashed var(--border);border-radius:var(--radius);padding:24px;text-align:center;cursor:pointer;transition:border-color .2s}
+  .upload-area:hover{border-color:var(--accent-light)}
+  .upload-area .icon{font-size:30px;margin-bottom:8px}
+  .upload-area p{font-size:14px;color:var(--muted)}
+  #photoInput,#videoInput{display:none}
+  .thumb-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+  .thumb-wrap{position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;background:var(--border)}
+  .thumb-wrap img,.thumb-wrap video{width:100%;height:100%;object-fit:cover}
+  .thumb-wrap .rm{position:absolute;top:4px;right:4px;background:rgba(0,0,0,.7);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .add-video-btn{margin-top:10px;background:var(--surface);border:1.5px solid var(--border);border-radius:var(--radius);padding:10px;color:var(--muted);font-size:13px;cursor:pointer;width:100%;text-align:center}
+  /* State modal */
+  .state-trigger{background:var(--surface);border:1.5px solid var(--border);border-radius:var(--radius);padding:14px;cursor:pointer;font-size:15px;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
+  .state-trigger.has-value{color:var(--text);border-color:var(--accent)}
+  .state-trigger .arrow{font-size:12px;color:var(--muted)}
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:500;display:none;align-items:flex-end}
+  .modal-overlay.open{display:flex}
+  .modal-sheet{background:#1a1a1a;border-radius:20px 20px 0 0;width:100%;max-height:85vh;display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom)}
+  .modal-header{padding:16px 16px 8px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);flex-shrink:0}
+  .modal-header h2{font-size:16px;font-weight:700}
+  .modal-close{background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1}
+  .modal-search{padding:10px 16px;flex-shrink:0}
+  .modal-search input{background:#111;border:1.5px solid var(--border);border-radius:10px;padding:10px 14px;color:var(--text);font-size:14px;width:100%;outline:none}
+  .modal-search input:focus{border-color:var(--accent)}
+  .modal-list{overflow-y:auto;padding:8px 16px 16px;flex:1}
+  .modal-state-row{padding:14px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:15px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+  .modal-state-row:active{background:rgba(255,255,255,.05);margin:0 -16px;padding-left:16px;padding-right:16px}
+  .modal-state-row .check{color:var(--accent);font-size:18px;display:none}
+  .modal-state-row.selected .check{display:block}
+  /* Duration unit buttons */
+  .duration-wrap{display:flex;flex-direction:column;gap:10px}
+  .duration-unit-btns{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .duration-number-wrap{display:none}
+  .duration-number-wrap.show{display:block}
+  .summary-section{margin-bottom:20px}
+  .summary-section .sh{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .summary-section .sh span{font-size:13px;font-weight:700;color:var(--accent-light)}
+  .summary-section .sh button{background:none;border:1px solid var(--border);border-radius:8px;padding:4px 10px;color:var(--muted);font-size:12px;cursor:pointer}
+  .summary-row{font-size:13px;line-height:1.8;color:var(--text)}
+  .summary-row strong{color:var(--muted);font-weight:500}
+  .summary-thumb{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  .summary-thumb img,.summary-thumb video{width:52px;height:52px;object-fit:cover;border-radius:8px;border:1px solid var(--border)}
+  .checkboxes{margin-top:16px}
+  .cb-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:12px}
+  .cb-row input[type=checkbox]{width:18px;height:18px;flex-shrink:0;margin-top:1px;accent-color:var(--accent);cursor:pointer}
+  .cb-row label{font-size:13px;color:var(--text);cursor:pointer;line-height:1.5}
+  .action-row{position:static;padding:12px 16px 24px;background:var(--bg);border-top:1px solid var(--border);display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px}
+  .btn{border:none;border-radius:var(--radius);padding:14px;font-size:15px;font-weight:600;cursor:pointer;transition:opacity .2s}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn-outline{background:var(--surface);border:1.5px solid var(--border);color:var(--text)}
+  .btn-primary{background:var(--accent);color:#fff}
+  .btn-primary:not(:disabled):hover{background:var(--accent-light)}
+  .spinner{display:inline-block;width:18px;height:18px;border:2.5px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .toast{position:fixed;top:80px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:999}
+  .toast.show{opacity:1}
+  .error-msg{font-size:12px;color:var(--red);margin-top:4px;display:none}
+  .error-msg.show{display:block}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>List Your Item</h1>
+  <p>Campus Marketplace</p>
+  <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+  <div class="progress-label" id="progressLabel">Step 0 of 7 sections</div>
+</header>
+
+<main id="mainForm">
+
+<!-- SECTION 1: BASIC INFO -->
+<div class="section" id="sec1">
+  <div class="section-title">📦 Section 1 — Basic Info</div>
+
+  <div class="step">
+    <div class="step-label">1. Item Title *</div>
+    <input type="text" id="itemTitle" placeholder="e.g. Samsung Galaxy A54, Red Nike Sneakers Size 42" />
+    <div class="step-tip">A clear title helps buyers find your item faster.</div>
+    <div class="error-msg" id="err-title">Please enter an item title.</div>
+  </div>
+
+  <div class="step">
+    <div class="step-label">2. Category *</div>
+    <div class="category-grid" id="catGrid"></div>
+    <div id="subSection" style="display:none">
+      <div class="step-label" style="margin-bottom:8px">Subcategory *</div>
+      <div class="sub-grid" id="subGrid"></div>
+    </div>
+    <div class="error-msg" id="err-cat">Please select a category and subcategory.</div>
+  </div>
+
+  <div class="step">
+    <div class="step-label">3. Brand Name *</div>
+    <input type="text" id="brand" placeholder="e.g. Samsung, Nike, LG, HP" />
+    <div class="step-tip">If there is no brand, type "No brand" or "Locally made".</div>
+    <div class="error-msg" id="err-brand">Please enter a brand name.</div>
+  </div>
+
+  <div class="step">
+    <div class="step-label">4. Condition *</div>
+    <div class="cards" id="conditionCards">
+      <div class="card" data-val="New" onclick="selectCard('condition','New',this)">
+        <div class="card-name">New</div>
+        <div class="card-sub">Never used. Still in original condition.</div>
+      </div>
+      <div class="card" data-val="Like New" onclick="selectCard('condition','Like New',this)">
+        <div class="card-name">Like New</div>
+        <div class="card-sub">Used very little. No visible scratches. Works perfectly.</div>
+      </div>
+      <div class="card" data-val="Good" onclick="selectCard('condition','Good',this)">
+        <div class="card-name">Good</div>
+        <div class="card-sub">Used but well maintained. Minor signs of use.</div>
+      </div>
+      <div class="card" data-val="Fair" onclick="selectCard('condition','Fair',this)">
+        <div class="card-name">Fair</div>
+        <div class="card-sub">Noticeable scratches or dents but still works fine.</div>
+      </div>
+      <div class="card" data-val="Faulty" onclick="selectCard('condition','Faulty',this)">
+        <div class="card-name">Faulty / For Parts</div>
+        <div class="card-sub">Not fully working. Sold as-is for repairs or spare parts.</div>
+      </div>
+    </div>
+    <div class="error-msg" id="err-condition">Please select a condition.</div>
+  </div>
+
+  <!-- Description — NO skip link -->
+  <div class="step">
+    <div class="step-label">5. Description <span style="color:var(--muted);font-weight:400">(optional)</span></div>
+    <textarea id="description" placeholder="Share extra details buyers should know — model number, colour, size, specs, etc."></textarea>
+  </div>
+</div>
+
+<!-- SECTION 2: PRICING -->
+<div class="section" id="sec2" style="display:none">
+  <div class="section-title">💰 Section 2 — Pricing</div>
+
+  <div class="step">
+    <div class="step-label">6. Original Price (₦) *</div>
+    <input type="number" id="originalPrice" placeholder="How much did you originally buy this for?" min="0" />
+    <div class="step-explain">This helps buyers understand the real value. An approximate amount is fine.</div>
+    <div class="error-msg" id="err-origprice">Please enter the original price.</div>
+  </div>
+
+  <div class="step">
+    <div class="step-label">7. Selling Price (₦) *</div>
+    <input type="number" id="sellingPrice" placeholder="Your asking price" min="0" />
+    <div class="step-explain">Price it fairly. Items priced too high sit for weeks. A competitive price means faster sale.</div>
+    <div class="error-msg" id="err-sellprice">Please enter your selling price.</div>
+  </div>
+
+  <div class="step">
+    <div class="step-label">8. Negotiable? *</div>
+    <div class="two-btns">
+      <div class="tap-btn" id="neg-yes" onclick="setNegotiable(true)">Yes, open to offers</div>
+      <div class="tap-btn" id="neg-no" onclick="setNegotiable(false)">No, fixed price</div>
+    </div>
+    <div class="field-reveal" id="lowestPriceField">
+      <div style="margin-top:10px">
+        <div class="step-label" style="font-size:13px">Lowest acceptable price (₦)</div>
+        <input type="number" id="lowestPrice" placeholder="Your lowest acceptable price" min="0" />
+        <div class="step-explain">This is private. Buyers will not see this directly.</div>
+      </div>
+    </div>
+    <div class="error-msg" id="err-neg">Please select yes or no.</div>
+  </div>
+</div>
+
+<!-- SECTION 3: PHOTOS & MEDIA -->
+<div class="section" id="sec3" style="display:none">
+  <div class="section-title">📸 Section 3 — Photos & Media</div>
+  <div class="step">
+    <div class="step-label">9. Upload Photos *</div>
+    <div class="upload-area" onclick="document.getElementById('photoInput').click()">
+      <div class="icon">📷</div>
+      <p>Tap to add photos from camera or gallery</p>
+    </div>
+    <input type="file" id="photoInput" accept="image/*" multiple onchange="handlePhotos(this)" />
+    <div class="thumb-grid" id="thumbGrid"></div>
+    <button class="add-video-btn" onclick="document.getElementById('videoInput').click()">🎬 Add Video (optional)</button>
+    <input type="file" id="videoInput" accept="video/*" onchange="handleVideo(this)" />
+    <div class="step-explain" style="margin-top:10px">
+      • Use bright natural lighting<br>
+      • Show all sides of the item<br>
+      • Show any damage clearly — hiding damage causes disputes<br>
+      • More photos = more buyer trust = faster sale
+    </div>
+    <div class="error-msg" id="err-photos">Please upload at least one photo.</div>
+  </div>
+</div>
+
+<!-- SECTION 4: CONDITION DETAILS -->
+<div class="section" id="sec4" style="display:none">
+  <div class="section-title">🔍 Section 4 — Item Condition Details</div>
+
+  <!-- Duration — compulsory, 3 unit buttons -->
+  <div class="step">
+    <div class="step-label">10. How long have you used it? *</div>
+    <div class="duration-wrap">
+      <div class="duration-unit-btns">
+        <div class="tap-btn" id="dur-days"   onclick="setDurationUnit('Days')">Days</div>
+        <div class="tap-btn" id="dur-months" onclick="setDurationUnit('Months')">Months</div>
+        <div class="tap-btn" id="dur-years"  onclick="setDurationUnit('Years')">Years</div>
+      </div>
+      <div class="duration-number-wrap" id="durationNumberWrap">
+        <input type="number" id="durationNumber" placeholder="Enter number" min="1" oninput="onDurationNumberInput()" />
+        <div class="step-tip" id="durationTip"></div>
+      </div>
+    </div>
+    <div class="error-msg" id="err-used">Please select a unit and enter the number.</div>
+  </div>
+
+  <div class="step">
+    <div class="step-label">11. Any defects or damages? *</div>
+    <div class="two-btns">
+      <div class="tap-btn" id="def-yes" onclick="toggleField('defects', true)">Yes, there are some</div>
+      <div class="tap-btn" id="def-no" onclick="toggleField('defects', false)">No, none</div>
+    </div>
+    <div class="field-reveal" id="defectsField">
+      <textarea id="defectsDetails" placeholder="e.g. Small crack on the back, screen has a minor scratch" style="margin-top:10px"></textarea>
+      <div class="step-explain">Please be honest. Hiding defects leads to disputes.</div>
+    </div>
+    <div class="error-msg" id="err-defects">Please answer this question.</div>
+  </div>
+
+  <div class="step">
+    <div class="step-label">12. Any repairs done before? *</div>
+    <div class="two-btns">
+      <div class="tap-btn" id="rep-yes" onclick="toggleField('repairs', true)">Yes, it was repaired</div>
+      <div class="tap-btn" id="rep-no" onclick="toggleField('repairs', false)">No</div>
+    </div>
+    <div class="field-reveal" id="repairsField">
+      <textarea id="repairsDetails" placeholder="e.g. Screen replaced 6 months ago, battery changed" style="margin-top:10px"></textarea>
+      <div class="step-explain">Disclosing repairs builds buyer confidence.</div>
+    </div>
+    <div class="error-msg" id="err-repairs">Please answer this question.</div>
+  </div>
+
+  <div class="step">
+    <div class="step-label">13. Reason for selling? <span style="color:var(--muted);font-weight:400">(optional)</span></div>
+    <div class="two-btns">
+      <div class="tap-btn" id="rsn-yes" onclick="toggleField('reason', true)">Yes, I'll share</div>
+      <div class="tap-btn" id="rsn-no" onclick="toggleField('reason', false)">Skip</div>
+    </div>
+    <div class="field-reveal" id="reasonField">
+      <input type="text" id="reasonForSelling" placeholder="e.g. Upgrading to a newer model, relocating" style="margin-top:10px" />
+    </div>
+  </div>
+</div>
+
+<!-- SECTION 5: LOCATION & DELIVERY -->
+<div class="section" id="sec5" style="display:none">
+  <div class="section-title">📍 Section 5 — Location & Delivery</div>
+
+  <div class="step">
+    <div class="step-label">14. State *</div>
+    <div class="state-trigger" id="stateTrigger" onclick="openStateModal()">
+      <span id="stateTriggerText">Tap to select your state</span>
+      <span class="arrow">▼</span>
+    </div>
+    <div class="error-msg" id="err-state">Please select your state.</div>
+  </div>
+
+  <div class="step">
+    <div class="step-label">15. City / Area *</div>
+    <input type="text" id="city" placeholder="e.g. Ado Ekiti, Ikeja, Wuse 2, Bodija" />
+    <div class="error-msg" id="err-city">Please enter your city or area.</div>
+  </div>
+
+  <div class="step">
+    <div class="step-label">16. Door Dropoff — Can you deliver to the buyer? *</div>
+    <div class="step-explain" style="margin-bottom:10px">
+      <strong>What is Door Dropoff?</strong><br>
+      You send the item to the buyer via dispatch rider, waybill, or courier. An escrow system protects both parties.
+    </div>
+    <div class="two-btns">
+      <div class="tap-btn" id="drop-yes" onclick="setDropoff(true)">Yes, I can deliver</div>
+      <div class="tap-btn" id="drop-no" onclick="setDropoff(false)">No, I cannot</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-label">17. Door Pickup — Can the buyer come to you? *</div>
+    <div class="step-explain" style="margin-bottom:10px">
+      <strong>Safety tip:</strong> Always meet in public places — malls, fuel stations, cafes, bank premises.
+    </div>
+    <div class="two-btns">
+      <div class="tap-btn" id="pick-yes" onclick="setPickup(true)">Yes, buyer can pick up</div>
+      <div class="tap-btn" id="pick-no" onclick="setPickup(false)">No pickup</div>
+    </div>
+    <div class="error-msg" id="err-delivery">At least one of Dropoff or Pickup must be Yes.</div>
+  </div>
+</div>
+
+<!-- SECTION 6: VERIFICATION & TRUST -->
+<div class="section" id="sec6" style="display:none">
+  <div class="section-title">🛡 Section 6 — Verification & Trust</div>
+  <div class="step-explain" style="margin-bottom:16px">These questions are optional but help buyers feel more confident. Takes less than 30 seconds.</div>
+
+  <div class="step">
+    <div class="step-label">18. Receipt available?</div>
+    <div class="step-explain" style="margin-bottom:8px">A purchase receipt proves the item was legitimately bought.</div>
+    <div class="two-btns">
+      <div class="tap-btn" id="rcpt-yes" onclick="setTwo('receipt','yes')">Yes, I have it</div>
+      <div class="tap-btn" id="rcpt-no"  onclick="setTwo('receipt','no')">No, I don't</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-label">19. Warranty remaining?</div>
+    <div class="step-explain" style="margin-bottom:8px">An active warranty is a major selling point — it gives buyers extra confidence.</div>
+    <div class="cards" id="warrantyCards">
+      <div class="card" data-val="yes" onclick="selectWarrantyCard('yes', this)">
+        <div class="card-name">✅ Yes, has warranty</div>
+        <div class="card-sub">The item still has an active manufacturer or seller warranty.</div>
+      </div>
+      <div class="card" data-val="no" onclick="selectWarrantyCard('no', this)">
+        <div class="card-name">❌ No warranty left</div>
+        <div class="card-sub">Warranty has expired or was never included.</div>
+      </div>
+    </div>
+    <div class="field-reveal" id="warrantyField">
+      <div class="duration-wrap" style="margin-top:10px">
+        <div class="duration-unit-btns">
+          <div class="tap-btn" id="warr-days"   onclick="setWarrantyUnit('Days')">Days</div>
+          <div class="tap-btn" id="warr-months" onclick="setWarrantyUnit('Months')">Months</div>
+          <div class="tap-btn" id="warr-years"  onclick="setWarrantyUnit('Years')">Years</div>
+        </div>
+        <div class="duration-number-wrap" id="warrantyNumberWrap">
+          <input type="number" id="warrantyNumber" placeholder="Enter number" min="1" oninput="onWarrantyNumberInput()" />
+          <div class="step-tip" id="warrantyTip"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-label">20. Original packaging available?</div>
+    <div class="step-explain" style="margin-bottom:8px">Having the original box and accessories makes your item look more complete.</div>
+    <div class="two-btns">
+      <div class="tap-btn" id="pkg-yes" onclick="setTwo('packaging','yes')">Yes, I have it</div>
+      <div class="tap-btn" id="pkg-no"  onclick="setTwo('packaging','no')">No, I don't</div>
+    </div>
+  </div>
+</div>
+
+<!-- SECTION 7: REVIEW & SUBMIT -->
+<div class="section" id="sec7" style="display:none">
+  <div class="section-title">✅ Section 7 — Review & Submit</div>
+  <p style="font-size:13px;color:var(--muted);margin-bottom:16px">Make sure everything looks correct before submitting.</p>
+  <div id="summaryContainer"></div>
+
+  <div class="checkboxes">
+    <div class="cb-row">
+      <input type="checkbox" id="cb1" onchange="updateSubmitBtn()" />
+      <label for="cb1">This item belongs to me and I have the right to sell it.</label>
+    </div>
+    <div class="cb-row">
+      <input type="checkbox" id="cb2" onchange="updateSubmitBtn()" />
+      <label for="cb2">All information I have provided is accurate and truthful.</label>
+    </div>
+    <div class="cb-row">
+      <input type="checkbox" id="cb3" onchange="updateSubmitBtn()" />
+      <label for="cb3">I agree to Campus Marketplace rules and terms.</label>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<!-- STATE MODAL -->
+<div class="modal-overlay" id="stateModal" onclick="onModalOverlayClick(event)">
+  <div class="modal-sheet">
+    <div class="modal-header">
+      <h2>Select Your State</h2>
+      <button class="modal-close" onclick="closeStateModal()">✕</button>
+    </div>
+    <div class="modal-search">
+      <input type="text" id="stateSearch" placeholder="Search state..." oninput="filterStates(this.value)" />
+    </div>
+    <div class="modal-list" id="stateModalList"></div>
+  </div>
+</div>
+
+<div style="padding:8px 16px 0;font-size:11px;color:#666;text-align:center">
+  💾 <strong>Save Draft</strong> stores your progress on this device — tap it anytime to save and come back later. Your draft loads automatically when you reopen the form.
+</div>
+
+<div class="action-row">
+  <button class="btn btn-outline" id="draftBtn" onclick="saveDraft()" title="Saves your progress so you can continue later. Your draft is stored on this device.">💾 Save Draft</button>
+  <button class="btn btn-primary" id="submitBtn" onclick="submitListing()" disabled>Submit Listing</button>
+</div>
+
+<!-- SUCCESS MODAL -->
+<div id="successModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:999;align-items:center;justify-content:center;flex-direction:column;text-align:center;padding:24px">
+  <div style="background:#1a1a1a;border-radius:20px;padding:32px 24px;max-width:320px;width:100%">
+    <div style="font-size:52px;margin-bottom:12px">🎉</div>
+    <div style="font-size:20px;font-weight:700;color:#f0f0f0;margin-bottom:8px">Submitted!</div>
+    <div style="font-size:14px;color:#888;margin-bottom:24px;line-height:1.6">Your listing has been submitted for review. We'll notify you on Telegram once it's approved (usually within 24 hours).</div>
+    <button onclick="closeAppAfterSubmit()" style="width:100%;background:#2563eb;color:#fff;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:600;cursor:pointer">✅ Close & Return to Bot</button>
+  </div>
+</div>
+
+<script src="categories.js"></script>
+<script src="states.js"></script>
+<div class="toast" id="toast"></div>
+<script>
+// ===== STATE =====
+const form = {
+  itemTitle:'', category:'', subcategory:'', brand:'', condition:'', description:'',
+  originalPrice:'', sellingPrice:'', negotiable:null, lowestPrice:'',
+  media:[], usedDuration:'', hasDefects:null, defectsDetails:'', wasRepaired:null,
+  repairsDetails:'', reasonForSelling:'', state:'', city:'', doorDropoff:null,
+  doorPickup:null, receiptAvailable:'', warrantyRemaining:'', warrantyDuration:'',
+  originalPackaging:''
+};
+let mediaFiles = []; // each entry: { dataUrl, type, file, file_id, uploading, uploadFailed }
+let durationUnit = ''; // 'Days','Months','Years'
+let warrantyUnit = ''; // 'Days','Months','Years'
+
+const params = new URLSearchParams(location.search);
+const userId = params.get('userId') || '';
+const plan = params.get('plan') || 'free';
+const days = params.get('days') || '';
+const amount = params.get('amount') || '';
+
+// ===== INIT — deferred for load speed =====
+window.addEventListener('DOMContentLoaded', () => {
+  if (window.Telegram && Telegram.WebApp) {
+    Telegram.WebApp.expand();
+    Telegram.WebApp.ready();
+  }
+  // Section 1 is visible immediately — render categories and progress
+  buildCategories();
+  updateProgress();
+  // After first paint: reveal remaining sections + build states + load draft
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      ['sec2','sec3','sec4','sec5','sec6','sec7'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = '';
+      });
+      buildStates();
+      setTimeout(() => { loadDraft(); }, 0);
+    });
+  });
+});
+
+// ===== CATEGORIES =====
+function buildCategories() {
+  const grid = document.getElementById('catGrid');
+  CATEGORIES.forEach(cat => {
+    const d = document.createElement('div');
+    d.className = 'cat-card';
+    d.dataset.cat = cat.name;
+    d.innerHTML = `<div class="icon">${cat.icon}</div><div class="cname">${cat.name}</div>`;
+    d.onclick = () => selectCategory(cat.name, d);
+    grid.appendChild(d);
+  });
+}
+
+function selectCategory(name, el) {
+  document.querySelectorAll('.cat-card').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  form.category = name;
+  form.subcategory = '';
+  buildSubcategories(name);
+  document.getElementById('subSection').style.display = 'block';
+  updateProgress();
+}
+
+function buildSubcategories(catName) {
+  const cat = CATEGORIES.find(c => c.name === catName);
+  if (!cat) return;
+  const grid = document.getElementById('subGrid');
+  grid.innerHTML = '';
+  cat.subcategories.forEach(sub => {
+    const d = document.createElement('div');
+    d.className = 'sub-card';
+    d.textContent = sub;
+    d.onclick = () => {
+      document.querySelectorAll('.sub-card').forEach(s => s.classList.remove('selected'));
+      d.classList.add('selected');
+      form.subcategory = sub;
+      updateProgress();
+    };
+    grid.appendChild(d);
+  });
+}
+
+// ===== STATE MODAL =====
+let stateRowEls = [];
+
+function buildStates() {
+  const list = document.getElementById('stateModalList');
+  stateRowEls = [];
+  STATES.forEach(s => {
+    const row = document.createElement('div');
+    row.className = 'modal-state-row';
+    row.dataset.state = s;
+    row.innerHTML = `<span>${s}</span><span class="check">✓</span>`;
+    row.onclick = () => selectState(s, row);
+    list.appendChild(row);
+    stateRowEls.push(row);
+  });
+}
+
+function openStateModal() {
+  document.getElementById('stateModal').classList.add('open');
+  document.getElementById('stateSearch').value = '';
+  filterStates('');
+  document.getElementById('stateSearch').focus();
+}
+
+function closeStateModal() {
+  document.getElementById('stateModal').classList.remove('open');
+}
+
+function onModalOverlayClick(e) {
+  if (e.target === document.getElementById('stateModal')) closeStateModal();
+}
+
+function filterStates(q) {
+  const lq = q.toLowerCase();
+  stateRowEls.forEach(row => {
+    row.style.display = row.dataset.state.toLowerCase().includes(lq) ? '' : 'none';
+  });
+}
+
+function selectState(s, row) {
+  stateRowEls.forEach(r => r.classList.remove('selected'));
+  row.classList.add('selected');
+  form.state = s;
+  const trigger = document.getElementById('stateTrigger');
+  document.getElementById('stateTriggerText').textContent = s;
+  trigger.classList.add('has-value');
+  closeStateModal();
+  updateProgress();
+}
+
+// ===== DURATION UNIT (Days/Months/Years) =====
+function setDurationUnit(unit) {
+  durationUnit = unit;
+  ['Days','Months','Years'].forEach(u => {
+    document.getElementById('dur-' + u.toLowerCase()).classList.toggle('selected', u === unit);
+  });
+  document.getElementById('durationNumberWrap').classList.add('show');
+  document.getElementById('durationNumber').value = '';
+  // Set tip and max
+  const tips = { Days: 'Enter 1–30', Months: 'Enter 1–12', Years: 'Enter a number (e.g. 2)' };
+  document.getElementById('durationTip').textContent = tips[unit];
+  document.getElementById('durationNumber').placeholder = tips[unit];
+  form.usedDuration = '';
+  updateProgress();
+}
+
+function onDurationNumberInput() {
+  const n = parseInt(document.getElementById('durationNumber').value);
+  if (!durationUnit || isNaN(n) || n <= 0) { form.usedDuration = ''; return; }
+  if (durationUnit === 'Days' && n > 30) { document.getElementById('durationNumber').value = 30; }
+  if (durationUnit === 'Months' && n > 12) { document.getElementById('durationNumber').value = 12; }
+  const final = parseInt(document.getElementById('durationNumber').value);
+  form.usedDuration = final + ' ' + durationUnit.toLowerCase();
+  updateProgress();
+}
+
+// ===== WARRANTY UNIT (Days/Months/Years) =====
+function setWarrantyUnit(unit) {
+  warrantyUnit = unit;
+  ['Days','Months','Years'].forEach(u => {
+    document.getElementById('warr-' + u.toLowerCase()).classList.toggle('selected', u === unit);
+  });
+  document.getElementById('warrantyNumberWrap').classList.add('show');
+  document.getElementById('warrantyNumber').value = '';
+  const tips = { Days: 'Enter 1–30', Months: 'Enter 1–12', Years: 'Enter a number (e.g. 2)' };
+  document.getElementById('warrantyTip').textContent = tips[unit];
+  document.getElementById('warrantyNumber').placeholder = tips[unit];
+  form.warrantyDuration = '';
+  updateProgress();
+}
+
+function onWarrantyNumberInput() {
+  const n = parseInt(document.getElementById('warrantyNumber').value);
+  if (!warrantyUnit || isNaN(n) || n <= 0) { form.warrantyDuration = ''; return; }
+  if (warrantyUnit === 'Days' && n > 30) { document.getElementById('warrantyNumber').value = 30; }
+  if (warrantyUnit === 'Months' && n > 12) { document.getElementById('warrantyNumber').value = 12; }
+  const final = parseInt(document.getElementById('warrantyNumber').value);
+  form.warrantyDuration = final + ' ' + warrantyUnit.toLowerCase();
+  updateProgress();
+}
+
+// ===== CARD / BUTTON SELECTORS =====
+function selectCard(field, val, el) {
+  el.closest('.cards').querySelectorAll('.card').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  form[field] = val;
+  updateProgress();
+}
+
+function setNegotiable(val) {
+  form.negotiable = val;
+  document.getElementById('neg-yes').classList.toggle('selected', val === true);
+  document.getElementById('neg-no').classList.toggle('selected', val === false);
+  const f = document.getElementById('lowestPriceField');
+  f.classList.toggle('show', val === true);
+  updateProgress();
+}
+
+function toggleField(key, show) {
+  const ids = {
+    defects: ['def-yes','def-no','defectsField'],
+    repairs: ['rep-yes','rep-no','repairsField'],
+    reason:  ['rsn-yes','rsn-no','reasonField']
+  };
+  const [yId, nId, fId] = ids[key];
+  document.getElementById(yId).classList.toggle('selected', show);
+  document.getElementById(nId).classList.toggle('selected', !show);
+  document.getElementById(fId).classList.toggle('show', show);
+  if (key === 'defects') form.hasDefects = show;
+  if (key === 'repairs') form.wasRepaired = show;
+  updateProgress();
+}
+
+function setDropoff(val) {
+  form.doorDropoff = val;
+  document.getElementById('drop-yes').classList.toggle('selected', val === true);
+  document.getElementById('drop-no').classList.toggle('selected', val === false);
+  updateProgress();
+}
+
+function setPickup(val) {
+  form.doorPickup = val;
+  document.getElementById('pick-yes').classList.toggle('selected', val === true);
+  document.getElementById('pick-no').classList.toggle('selected', val === false);
+  updateProgress();
+}
+
+// Two-button trust section (no Skip)
+function setTwo(key, val) {
+  const map = {
+    receipt:   ['rcpt-yes','rcpt-no'],
+    warranty:  ['warr-yes','warr-no'],
+    packaging: ['pkg-yes','pkg-no']
+  };
+  // warranty now uses card UI, not tap-btn — skip map for warranty
+  if (key === 'warranty') {
+    form.warrantyRemaining = val;
+    document.getElementById('warrantyField').classList.toggle('show', val === 'yes');
+    updateProgress();
+    return;
+  }
+  const [yId, nId] = map[key];
+  document.getElementById(yId).classList.toggle('selected', val === 'yes');
+  document.getElementById(nId).classList.toggle('selected', val === 'no');
+  if (key === 'receipt')   form.receiptAvailable = val;
+  if (key === 'packaging') form.originalPackaging = val;
+  updateProgress();
+}
+
+function selectWarrantyCard(val, el) {
+  document.querySelectorAll('#warrantyCards .card').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  form.warrantyRemaining = val;
+  document.getElementById('warrantyField').classList.toggle('show', val === 'yes');
+  // Reset warranty duration if user switches to "no warranty"
+  if (val !== 'yes') {
+    warrantyUnit = '';
+    form.warrantyDuration = '';
+    ['days','months','years'].forEach(u => document.getElementById('warr-' + u).classList.remove('selected'));
+    document.getElementById('warrantyNumberWrap').classList.remove('show');
+    document.getElementById('warrantyNumber').value = '';
+  }
+  updateProgress();
+}
+
+// ===== MEDIA =====
+function handlePhotos(input) {
+  const files = Array.from(input.files);
+  files.forEach(file => {
+    if (mediaFiles.filter(m => m.type === 'photo').length >= 10) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const entry = { dataUrl: e.target.result, type: 'photo', file, file_id: null, uploading: true, uploadFailed: false };
+      mediaFiles.push(entry);
+      renderThumbs();
+      updateProgress();
+      silentUpload(entry);
+    };
+    reader.readAsDataURL(file);
+  });
+  input.value = '';
+}
+
+function handleVideo(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const entry = { dataUrl: e.target.result, type: 'video', file, file_id: null, uploading: true, uploadFailed: false };
+    mediaFiles.push(entry);
+    renderThumbs();
+    silentUpload(entry);
+  };
+  reader.readAsDataURL(file);
+  input.value = '';
+}
+
+function compressImage(file) {
+  return new Promise(resolve => {
+    // Videos — skip compression entirely
+    if (!file.type.startsWith('image/')) { resolve(file); return; }
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const MAX = 1280;
+      let w = img.width, h = img.height;
+      if (w > MAX || h > MAX) {
+        if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+        else       { w = Math.round(w * MAX / h); h = MAX; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      canvas.toBlob(blob => {
+        resolve(blob ? new File([blob], file.name, { type: 'image/jpeg' }) : file);
+      }, 'image/jpeg', 0.82);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+
+async function silentUpload(entry) {
+  try {
+    const fileToSend = await compressImage(entry.file);
+    const fd = new FormData();
+    fd.append('file', fileToSend, entry.file.name);
+    const res = await fetch('https://campusmarketplace-production-06b3.up.railway.app/api/upload-media', {
+      method: 'POST',
+      body: fd
+    });
+    const data = await res.json();
+    if (data.success && data.file_id) {
+      entry.file_id = data.file_id;
+      entry.type = data.type;
+      entry.uploading = false;
+      entry.uploadFailed = false;
+    } else {
+      entry.uploading = false;
+      entry.uploadFailed = true;
+    }
+  } catch (err) {
+    entry.uploading = false;
+    entry.uploadFailed = true;
+  }
+  renderThumbs();
+}
+
+function renderThumbs() {
+  const grid = document.getElementById('thumbGrid');
+  grid.innerHTML = '';
+  mediaFiles.forEach((m, i) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'thumb-wrap';
+    const indicator = m.uploading
+      ? `<span style="position:absolute;bottom:4px;left:4px;background:rgba(0,0,0,.7);color:#fff;font-size:10px;padding:2px 5px;border-radius:4px">⬆️</span>`
+      : m.uploadFailed
+        ? `<span style="position:absolute;bottom:4px;left:4px;background:rgba(200,0,0,.8);color:#fff;font-size:10px;padding:2px 5px;border-radius:4px">⚠️ retry</span>`
+        : `<span style="position:absolute;bottom:4px;left:4px;background:rgba(0,150,0,.8);color:#fff;font-size:10px;padding:2px 5px;border-radius:4px">✓</span>`;
+    if (m.type === 'photo') {
+      wrap.innerHTML = `<img src="${m.dataUrl}" /><button class="rm" onclick="removeMedia(${i})">✕</button>${indicator}`;
+    } else {
+      wrap.innerHTML = `<video src="${m.dataUrl}" muted></video><button class="rm" onclick="removeMedia(${i})">✕</button>${indicator}`;
+    }
+    grid.appendChild(wrap);
+  });
+}
+
+function removeMedia(i) {
+  mediaFiles.splice(i, 1);
+  renderThumbs();
+  updateProgress();
+}
+
+// ===== PROGRESS =====
+function updateProgress() {
+  let done = 0;
+  const total = 7;
+  if (document.getElementById('itemTitle').value.trim()) done++;
+  if (form.category && form.subcategory) done++;
+  if (document.getElementById('brand').value.trim() && form.condition) done++;
+  if (document.getElementById('sellingPrice').value && form.negotiable !== null && document.getElementById('originalPrice').value) done++;
+  if (mediaFiles.filter(m => m.type === 'photo').length > 0) done++;
+  if (form.usedDuration && form.hasDefects !== null && form.wasRepaired !== null) done++;
+  if (form.state && document.getElementById('city').value.trim() && (form.doorDropoff !== null || form.doorPickup !== null)) done++;
+  const pct = Math.round((done / total) * 100);
+  document.getElementById('progressFill').style.width = pct + '%';
+  document.getElementById('progressLabel').textContent = `${done} of ${total} sections complete`;
+}
+
+// ===== VALIDATION =====
+function validate() {
+  let ok = true;
+  const show = (id, v) => { const el = document.getElementById(id); el && (el.classList.toggle('show', !v)); };
+
+  const title = document.getElementById('itemTitle').value.trim();
+  show('err-title', title); if (!title) ok = false;
+
+  show('err-cat', form.category && form.subcategory); if (!form.category || !form.subcategory) ok = false;
+
+  const brand = document.getElementById('brand').value.trim();
+  show('err-brand', brand); if (!brand) ok = false;
+
+  show('err-condition', form.condition); if (!form.condition) ok = false;
+
+  const origP = parseInt(document.getElementById('originalPrice').value);
+  show('err-origprice', !isNaN(origP) && origP >= 0); if (isNaN(origP) || origP < 0) ok = false;
+
+  const sellP = parseInt(document.getElementById('sellingPrice').value);
+  show('err-sellprice', !isNaN(sellP) && sellP > 0); if (isNaN(sellP) || sellP <= 0) ok = false;
+
+  show('err-neg', form.negotiable !== null); if (form.negotiable === null) ok = false;
+
+  const photos = mediaFiles.filter(m => m.type === 'photo');
+  show('err-photos', photos.length > 0); if (photos.length === 0) ok = false;
+
+  // Duration is now compulsory
+  show('err-used', !!form.usedDuration); if (!form.usedDuration) ok = false;
+
+  show('err-defects', form.hasDefects !== null); if (form.hasDefects === null) ok = false;
+  show('err-repairs', form.wasRepaired !== null); if (form.wasRepaired === null) ok = false;
+
+  show('err-state', !!form.state); if (!form.state) ok = false;
+
+  const city = document.getElementById('city').value.trim();
+  show('err-city', city); if (!city) ok = false;
+
+  const delOk = form.doorDropoff === true || form.doorPickup === true;
+  if (form.doorDropoff !== null || form.doorPickup !== null) {
+    show('err-delivery', delOk);
+    if (!delOk) ok = false;
+  } else {
+    show('err-delivery', false);
+    ok = false;
+  }
+
+  return ok;
+}
+
+function updateSubmitBtn() {
+  const allChecked = document.getElementById('cb1').checked && document.getElementById('cb2').checked && document.getElementById('cb3').checked;
+  document.getElementById('submitBtn').disabled = !allChecked;
+}
+
+// ===== DRAFT =====
+function collectFormData() {
+  return {
+    itemTitle: document.getElementById('itemTitle').value.trim(),
+    category: form.category,
+    subcategory: form.subcategory,
+    brand: document.getElementById('brand').value.trim(),
+    condition: form.condition,
+    description: document.getElementById('description').value.trim(),
+    originalPrice: document.getElementById('originalPrice').value,
+    sellingPrice: document.getElementById('sellingPrice').value,
+    negotiable: form.negotiable,
+    lowestPrice: document.getElementById('lowestPrice').value,
+    usedDuration: form.usedDuration,
+    _durationUnit: durationUnit,
+    _durationNumber: document.getElementById('durationNumber').value,
+    hasDefects: form.hasDefects,
+    defectsDetails: document.getElementById('defectsDetails').value.trim(),
+    wasRepaired: form.wasRepaired,
+    repairsDetails: document.getElementById('repairsDetails').value.trim(),
+    reasonForSelling: document.getElementById('reasonForSelling').value.trim(),
+    state: form.state,
+    city: document.getElementById('city').value.trim(),
+    doorDropoff: form.doorDropoff,
+    doorPickup: form.doorPickup,
+    receiptAvailable: form.receiptAvailable,
+    warrantyRemaining: form.warrantyRemaining,
+    warrantyDuration: form.warrantyDuration,
+    _warrantyUnit: warrantyUnit,
+    _warrantyNumber: document.getElementById('warrantyNumber') ? document.getElementById('warrantyNumber').value : '',
+    originalPackaging: form.originalPackaging,
+    plan, days, amount
+  };
+}
+
+function saveDraft() {
+  try {
+    const data = collectFormData();
+    localStorage.setItem('cm_draft_' + userId, JSON.stringify(data));
+    showToast('✅ Draft saved! Your progress is stored on this device. Next time you open this form, it will automatically reload where you left off.');
+  } catch(e) { showToast('Could not save draft.'); }
+}
+
+function resetFormFields() {
+  // Clear all inputs
+  document.querySelectorAll('input[type=text], input[type=number], textarea').forEach(el => { el.value = ''; });
+  // Clear selections
+  document.querySelectorAll('.card.selected, .cat-card.selected, .sub-card.selected, .tap-btn.active').forEach(el => el.classList.remove('selected','active'));
+  // Reset form state
+  Object.keys(form).forEach(k => {
+    if (typeof form[k] === 'boolean' || form[k] === null) form[k] = null;
+    else form[k] = '';
+  });
+  form.negotiable = null; form.doorDropoff = null; form.doorPickup = null;
+  // Hide revealed fields
+  document.querySelectorAll('.field-reveal.show').forEach(el => el.classList.remove('show'));
+  // Reset media
+  mediaFiles = [];
+  renderThumbs();
+  // Reset checkboxes
+  ['cb1','cb2','cb3'].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
+  document.getElementById('submitBtn').disabled = true;
+  updateProgress();
+}
+
+function loadDraft() {
+  try {
+    const raw = localStorage.getItem('cm_draft_' + userId);
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined && v !== null && v !== '') el.value = v; };
+    setVal('itemTitle', d.itemTitle);
+    setVal('brand', d.brand);
+    setVal('description', d.description);
+    setVal('originalPrice', d.originalPrice);
+    setVal('sellingPrice', d.sellingPrice);
+    setVal('lowestPrice', d.lowestPrice);
+    setVal('defectsDetails', d.defectsDetails);
+    setVal('repairsDetails', d.repairsDetails);
+    setVal('reasonForSelling', d.reasonForSelling);
+    setVal('city', d.city);
+    // Restore warranty duration unit/number
+    if (d._warrantyUnit) {
+      setWarrantyUnit(d._warrantyUnit);
+      if (d._warrantyNumber) {
+        document.getElementById('warrantyNumber').value = d._warrantyNumber;
+        onWarrantyNumberInput();
+      }
+    }
+
+    if (d.category) {
+      form.category = d.category;
+      const catEl = document.querySelector(`.cat-card[data-cat="${d.category}"]`);
+      if (catEl) { catEl.classList.add('selected'); buildSubcategories(d.category); document.getElementById('subSection').style.display = 'block'; }
+    }
+    if (d.subcategory) {
+      form.subcategory = d.subcategory;
+      setTimeout(() => {
+        document.querySelectorAll('.sub-card').forEach(s => { if (s.textContent === d.subcategory) s.classList.add('selected'); });
+      }, 100);
+    }
+    if (d.condition) {
+      form.condition = d.condition;
+      document.querySelectorAll('#conditionCards .card').forEach(c => { if (c.dataset.val === d.condition) c.classList.add('selected'); });
+    }
+    if (d.negotiable !== null && d.negotiable !== undefined) setNegotiable(d.negotiable);
+    // Restore duration
+    if (d._durationUnit) {
+      setDurationUnit(d._durationUnit);
+      if (d._durationNumber) {
+        document.getElementById('durationNumber').value = d._durationNumber;
+        onDurationNumberInput();
+      }
+    }
+    if (d.hasDefects !== null && d.hasDefects !== undefined) toggleField('defects', d.hasDefects);
+    if (d.wasRepaired !== null && d.wasRepaired !== undefined) toggleField('repairs', d.wasRepaired);
+    if (d.reasonForSelling) toggleField('reason', true);
+    if (d.state) {
+      form.state = d.state;
+      document.getElementById('stateTriggerText').textContent = d.state;
+      document.getElementById('stateTrigger').classList.add('has-value');
+      // Highlight in modal list if already built
+      stateRowEls.forEach(r => { r.classList.toggle('selected', r.dataset.state === d.state); });
+    }
+    if (d.doorDropoff !== null && d.doorDropoff !== undefined) setDropoff(d.doorDropoff);
+    if (d.doorPickup !== null && d.doorPickup !== undefined) setPickup(d.doorPickup);
+    if (d.receiptAvailable) setTwo('receipt', d.receiptAvailable);
+    if (d.warrantyRemaining) {
+      const wEl = document.querySelector(`#warrantyCards .card[data-val="${d.warrantyRemaining}"]`);
+      if (wEl) selectWarrantyCard(d.warrantyRemaining, wEl);
+    }
+    if (d.originalPackaging) setTwo('packaging', d.originalPackaging);
+
+    updateProgress();
+    // Only show toast if draft has real content
+    if (d.itemTitle || d.category || d.brand) {
+      showToast('📂 Draft restored — pick up where you left off.');
+    }
+  } catch(e) {}
+}
+
+// ===== SUMMARY =====
+function buildSummary() {
+  const d = collectFormData();
+  const neg = d.negotiable ? `Yes (Min: ₦${parseInt(d.lowestPrice||0).toLocaleString()})` : 'No';
+  const photos = mediaFiles.filter(m => m.type === 'photo');
+  const videos = mediaFiles.filter(m => m.type === 'video');
+
+  let thumbHtml = '<div class="summary-thumb">';
+  photos.forEach(m => { thumbHtml += `<img src="${m.dataUrl}" />`; });
+  videos.forEach(m => { thumbHtml += `<video src="${m.dataUrl}" muted></video>`; });
+  thumbHtml += '</div>';
+
+  const rows = [
+    { title: 'Basic Info', id: 'sec1', rows: `<strong>Title:</strong> ${d.itemTitle}<br><strong>Category:</strong> ${d.category} › ${d.subcategory}<br><strong>Brand:</strong> ${d.brand}<br><strong>Condition:</strong> ${d.condition}<br><strong>Description:</strong> ${d.description || 'N/A'}` },
+    { title: 'Pricing', id: 'sec2', rows: `<strong>Original Price:</strong> ₦${parseInt(d.originalPrice||0).toLocaleString()}<br><strong>Selling Price:</strong> ₦${parseInt(d.sellingPrice||0).toLocaleString()}<br><strong>Negotiable:</strong> ${neg}` },
+    { title: 'Photos & Media', id: 'sec3', rows: `${photos.length} photo(s), ${videos.length} video(s)${thumbHtml}` },
+    { title: 'Condition Details', id: 'sec4', rows: `<strong>Used For:</strong> ${d.usedDuration || 'N/A'}<br><strong>Defects:</strong> ${d.hasDefects ? (d.defectsDetails || 'Yes') : 'None'}<br><strong>Repairs:</strong> ${d.wasRepaired ? (d.repairsDetails || 'Yes') : 'None'}<br><strong>Reason:</strong> ${d.reasonForSelling || 'N/A'}` },
+    { title: 'Location & Delivery', id: 'sec5', rows: `<strong>State:</strong> ${d.state}<br><strong>City:</strong> ${d.city}<br><strong>Door Dropoff:</strong> ${d.doorDropoff ? 'Yes' : 'No'}<br><strong>Door Pickup:</strong> ${d.doorPickup ? 'Yes' : 'No'}` },
+    { title: 'Trust & Verification', id: 'sec6', rows: `<strong>Receipt:</strong> ${d.receiptAvailable || 'Not answered'}<br><strong>Warranty:</strong> ${d.warrantyRemaining === 'yes' ? (d.warrantyDuration || 'Yes') : (d.warrantyRemaining || 'Not answered')}<br><strong>Packaging:</strong> ${d.originalPackaging || 'Not answered'}` }
+  ];
+
+  const container = document.getElementById('summaryContainer');
+  container.innerHTML = rows.map(r =>
+    `<div class="summary-section">
+      <div class="sh"><span>${r.title}</span><button onclick="document.getElementById('${r.id}').scrollIntoView({behavior:'smooth'})">Edit</button></div>
+      <div class="summary-row">${r.rows}</div>
+    </div>`
+  ).join('');
+}
+
+// ===== SUBMIT =====
+async function submitListing() {
+  if (!validate()) {
+    showToast('Please complete all required fields.');
+    document.querySelector('.error-msg.show')?.closest('.step')?.scrollIntoView({ behavior: 'smooth' });
+    return;
+  }
+
+  buildSummary();
+
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Submitting...';
+
+  // Clear draft optimistically so it doesn't reload on next open
+  try { localStorage.removeItem('cm_draft_' + userId); } catch(e) {}
+
+  try {
+    const data = collectFormData();
+
+    const fd = new FormData();
+    Object.entries(data).forEach(([k, v]) => {
+      if (v !== null && v !== undefined) fd.append(k, String(v));
+    });
+    fd.append('userId', userId);
+
+    // Retry any failed uploads before submitting
+    const failedUploads = mediaFiles.filter(m => m.uploadFailed || (!m.file_id && !m.uploading));
+    if (failedUploads.length > 0) {
+      btn.innerHTML = '<span class="spinner"></span>Retrying failed uploads...';
+      await Promise.all(failedUploads.map(m => silentUpload(m)));
+    }
+
+    // Wait for any still-uploading files to finish
+    const stillUploading = mediaFiles.filter(m => m.uploading);
+    if (stillUploading.length > 0) {
+      btn.innerHTML = '<span class="spinner"></span>Finishing uploads...';
+      await new Promise(resolve => {
+        const check = setInterval(() => {
+          if (!mediaFiles.some(m => m.uploading)) {
+            clearInterval(check);
+            resolve();
+          }
+        }, 300);
+      });
+    }
+
+    // Attach pre-uploaded file_ids as a single JSON array field — repeated
+    // same-name fields are unreliable to parse server-side with multipart
+    // form parsers, a single JSON array is not.
+    const preuploadedMedia = mediaFiles
+      .filter(m => m.file_id)
+      .map(m => ({ file_id: m.file_id, type: m.type }));
+    fd.append('preuploadedMedia', JSON.stringify(preuploadedMedia));
+
+    btn.innerHTML = '<span class="spinner"></span>Submitting...';
+
+    const res = await fetch('/api/submit-listing', {
+      method: 'POST',
+      body: fd
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Server error');
+    }
+
+    // Show success modal
+    const modal = document.getElementById('successModal');
+    modal.style.display = 'flex';
+
+  } catch (e) {
+    btn.disabled = false;
+    btn.innerHTML = 'Submit Listing';
+    showToast('Submission failed. Please check your connection and try again.');
+  }
+}
+
+function closeAppAfterSubmit() {
+  if (window.Telegram && Telegram.WebApp) {
+    Telegram.WebApp.close();
+  } else {
+    document.getElementById('successModal').style.display = 'none';
+  }
+}
+
+// ===== TOAST =====
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// Track input changes for progress
+['itemTitle','brand','originalPrice','sellingPrice','city'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('input', updateProgress);
+});
+
+// Build summary when sec7 scrolls into view
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(e => { if (e.isIntersecting) buildSummary(); });
+}, { threshold: 0.1 });
+const sec7 = document.getElementById('sec7');
+if (sec7) observer.observe(sec7);
+</script>
+</body>
+</html>
