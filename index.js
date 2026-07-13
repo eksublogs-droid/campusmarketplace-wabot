@@ -338,6 +338,46 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
+// ===== Admin user panel (for clearing test users without SQL) =====
+app.get('/admin', (req, res) => {
+  res.sendFile(__dirname + '/public/admin.html');
+});
+
+// Protected by ADMIN_PANEL_KEY env var, sent as an 'x-admin-key' header —
+// keeps the password out of the URL/browser history, unlike a query param.
+function checkAdminKey(req, res) {
+  const expected = process.env.ADMIN_PANEL_KEY;
+  if (!expected) {
+    res.status(500).json({ error: 'ADMIN_PANEL_KEY not set on the server' });
+    return false;
+  }
+  if (req.headers['x-admin-key'] !== expected) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+app.get('/api/admin/users', async (req, res) => {
+  if (!checkAdminKey(req, res)) return;
+  try {
+    const users = await userRepo.listUsers();
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/users/:phone', async (req, res) => {
+  if (!checkAdminKey(req, res)) return;
+  try {
+    await userRepo.deleteUserByPhone(req.params.phone);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/link', async (req, res) => {
   const phone = (req.body.phone || '').replace(/\D/g, '');
   if (!phone || phone.length < 10) {
