@@ -1,0 +1,129 @@
+{
+  "version": "5.1",
+  "screens": [
+    {
+      "id": "ITEM_DETAILS",
+      "title": "Item Details",
+      "data": {},
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextInput",
+            "name": "name",
+            "label": "Item name",
+            "input-type": "text",
+            "required": true
+          },
+          {
+            "type": "Dropdown",
+            "name": "category",
+            "label": "Category",
+            "required": true,
+            "data-source": [
+              { "id": "Electronics", "title": "Electronics" },
+              { "id": "Fashion", "title": "Fashion" },
+              { "id": "Books", "title": "Books" },
+              { "id": "Home & Living", "title": "Home & Living" },
+              { "id": "Other", "title": "Other" }
+            ]
+          },
+          {
+            "type": "RadioButtonsGroup",
+            "name": "condition",
+            "label": "Condition",
+            "required": true,
+            "data-source": [
+              { "id": "New", "title": "New" },
+              { "id": "Fairly Used", "title": "Fairly Used" },
+              { "id": "Used - Faulty", "title": "Used - Faulty" }
+            ]
+          },
+          {
+            "type": "TextInput",
+            "name": "selling_price",
+            "label": "Selling price (₦)",
+            "input-type": "number",
+            "required": true
+          },
+          {
+            "type": "TextArea",
+            "name": "description",
+            "label": "Description",
+            "required": true
+          },
+          {
+            "type": "Footer",
+            "label": "Next",
+            "on-click-action": {
+              "name": "navigate",
+              "next": { "type": "screen", "name": "LOCATION" },
+              "payload": {
+                "name": "${form.name}",
+                "category": "${form.category}",
+                "condition": "${form.condition}",
+                "selling_price": "${form.selling_price}",
+                "description": "${form.description}"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "LOCATION",
+      "title": "Location & Contact",
+      "terminal": true,
+      "data": {
+        "name": { "type": "string", "__example__": "" },
+        "category": { "type": "string", "__example__": "" },
+        "condition": { "type": "string", "__example__": "" },
+        "selling_price": { "type": "string", "__example__": "" },
+        "description": { "type": "string", "__example__": "" }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextInput",
+            "name": "state",
+            "label": "State",
+            "input-type": "text",
+            "required": true
+          },
+          {
+            "type": "TextInput",
+            "name": "city",
+            "label": "City / town",
+            "input-type": "text",
+            "required": true
+          },
+          {
+            "type": "TextInput",
+            "name": "seller_whatsapp",
+            "label": "WhatsApp number (with country code, no +)",
+            "input-type": "phone",
+            "required": true
+          },
+          {
+            "type": "Footer",
+            "label": "Submit Listing",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {
+                "name": "${data.name}",
+                "category": "${data.category}",
+                "condition": "${data.condition}",
+                "selling_price": "${data.selling_price}",
+                "description": "${data.description}",
+                "state": "${form.state}",
+                "city": "${form.city}",
+                "seller_whatsapp": "${form.seller_whatsapp}"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
