@@ -7,11 +7,11 @@ const { sendListMenu, sendButtons, sendCtaUrl } = require('../utils/interactive'
 const { sendLikeHuman, pickVariant } = require('../utils/humanize');
 
 const MAIN_OPTIONS = [
-  { label: '🛍️ Buy Used Items' },
-  { label: '💰 Sell an Item' },
-  { label: '📋 My Listings' },
-  { label: '💎 Upgrade a Listing to Pro' },
-  { label: '❓ Help' }
+  { label: '🛍️ Buy Items', description: 'Browse listings for sale' },
+  { label: '💰 Sell an Item', description: 'List something to sell' },
+  { label: '📋 My Listings', description: 'View your posted items' },
+  { label: '💎 Upgrade to Pro', description: 'Pin a listing to the top' },
+  { label: '❓ Help', description: 'How to use this bot' }
 ];
 
 // Several phrasings for the very first message a new contact gets — picked
@@ -52,7 +52,7 @@ async function showMainMenu(sock, jid, user) {
   await sendButtonMenu(
     sock, jid,
     `Hi *${user.name}*! What would you like to do?`,
-    MAIN_OPTIONS.map((opt, i) => ({ id: String(i + 1), label: opt.label })),
+    MAIN_OPTIONS.map((opt, i) => ({ id: String(i + 1), label: opt.label, description: opt.description })),
     'You can also just type the number (1-5).'
   );
 }
@@ -204,7 +204,7 @@ async function showHelp(sock, jid) {
 
   const adminPhone = (process.env.ADMIN_WHATSAPP || '').replace(/\D/g, '');
   if (adminPhone) {
-    return sendCtaUrl(sock, jid, body, '💬 Chat with Support', `https://wa.me/${adminPhone}`);
+    return sendCtaUrl(sock, jid, body, '💬 Chat with Us', `https://wa.me/${adminPhone}`);
   }
   await sock.sendMessage(jid, { text: `${body}\n\nFor direct support, message our team.` });
 }
