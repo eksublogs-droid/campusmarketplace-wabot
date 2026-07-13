@@ -30,4 +30,18 @@ async function getUserByPhone(phone) {
   return data;
 }
 
-module.exports = { getOrCreateUser, updateUser, getUserByPhone };
+async function listUsers() {
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .order('registered_at', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+async function deleteUserByPhone(phone) {
+  const { error } = await supabase.from('users').delete().eq('phone', phone);
+  if (error) throw error;
+}
+
+module.exports = { getOrCreateUser, updateUser, getUserByPhone, listUsers, deleteUserByPhone };
