@@ -71,8 +71,8 @@ create table if not exists payment_receipts (
   created_at timestamptz default now()
 );
 
--- ===== Baileys auth/session state (keeps WhatsApp linked across redeploys) =====
-create table if not exists auth_state (
+-- ===== Generic key/value store (currently used for bot status) =====
+create table if not exists bot_kv (
   key text primary key,
   value jsonb
 );
