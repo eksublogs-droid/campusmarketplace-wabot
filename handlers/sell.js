@@ -1,7 +1,7 @@
 const productRepo = require('../repos/productRepo');
 const { setSession, updateSession, getSession, clearSession } = require('../utils/session');
 const { uploadBuffer } = require('../utils/media');
-const { sendSmartMenu, sendFlow } = require('../utils/interactive');
+const { sendSmartMenu, sendFlow, sendCtaUrl } = require('../utils/interactive');
 
 // Steps that support a short fixed set of choices now show reply
 // buttons/list options (auto-picked by count) instead of asking the user to
@@ -41,6 +41,25 @@ async function askStep(sock, jid, stepDef) {
 
 async function startSellFlow(sock, jid, user) {
   updateSession(jid, { sellData: {}, sellMedia: [] });
+
+  // Preferred path: the mobile-friendly "one page, all fields" form
+  // (public/sell-form.html), opened via a CTA link. Works today with no
+  // Meta business verification needed, unlike native Flows below.
+  const siteUrl = process.env.PUBLIC_SITE_URL;
+  if (siteUrl) {
+    const phone = jid.split('@')[0];
+    const formUrl = `${siteUrl.replace(/\/$/, '')}/sell-form.html?userId=${encodeURIComponent(phone)}`;
+    const sent = await sendCtaUrl(
+      sock, jid,
+      '📦 Let\'s list your item! Fill in the quick form below — everything on one page.',
+      'Start Selling',
+      formUrl
+    );
+    if (sent) {
+      setSession(jid, 'sell_flow_pending');
+      return;
+    }
+  }
 
   // Optional: if a "Sell an Item" WhatsApp Flow is published and its ID is
   // set in WA_SELL_FLOW_ID, use it for a native multi-step form instead of
