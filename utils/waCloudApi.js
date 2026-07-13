@@ -55,8 +55,18 @@ async function graphGet(path) {
   return data;
 }
 
-// Converts our internal { text } / { image: { url }, caption } shape into
-// a Cloud API message payload and sends it.
+// Builds an interactive `header` object from either a plain string (text
+// header) or a { type: 'image'|'video'|'document', link } media header.
+function buildHeader(header) {
+  if (!header) return undefined;
+  if (typeof header === 'string') return { type: 'text', text: header };
+  return { type: header.type, [header.type]: { link: header.link } };
+}
+
+// Converts our internal content shapes into a Cloud API message payload and
+// sends it. Supports plain text/media (unchanged, original shapes) plus the
+// official interactive types: buttons, list, cta_url, flow, and raw
+// templates.
 async function sendMessage(jid, content) {
   const to = toBarePhone(jid);
   if (!to) return null;
@@ -85,6 +95,77 @@ async function sendMessage(jid, content) {
       type: 'document',
       document: { link: content.document.url, caption: content.caption || '', filename: content.fileName || 'document.pdf' }
     };
+  } else if (content.buttons) {
+    // Reply-button interactive message. Max 3 buttons (WhatsApp limit) —
+    // enforced by callers via utils/interactive.js.
+    const b = content.buttons;
+    payload = {
+      messaging_product: 'whatsapp', to, type: 'interactive',
+      interactive: {
+        type: 'button',
+        ...(buildHeader(b.header) ? { header: buildHeader(b.header) } : {}),
+        body: { text: b.body },
+        ...(b.footer ? { footer: { text: b.footer } } : {}),
+        action: { buttons: b.buttons.map(btn => ({ type: 'reply', reply: { id: btn.id, title: btn.title } })) }
+      }
+    };
+  } else if (content.list) {
+    // List-message interactive type. Max 10 rows total across sections —
+    // enforced by callers via utils/interactive.js.
+    const l = content.list;
+    payload = {
+      messaging_product: 'whatsapp', to, type: 'interactive',
+      interactive: {
+        type: 'list',
+        ...(buildHeader(l.header) ? { header: buildHeader(l.header) } : {}),
+        body: { text: l.body },
+        ...(l.footer ? { footer: { text: l.footer } } : {}),
+        action: { button: l.buttonText || 'Choose', sections: l.sections }
+      }
+    };
+  } else if (content.cta_url) {
+    const c = content.cta_url;
+    payload = {
+      messaging_product: 'whatsapp', to, type: 'interactive',
+      interactive: {
+        type: 'cta_url',
+        ...(buildHeader(c.header) ? { header: buildHeader(c.header) } : {}),
+        body: { text: c.body },
+        ...(c.footer ? { footer: { text: c.footer } } : {}),
+        action: { name: 'cta_url', parameters: { display_text: c.displayText, url: c.url } }
+      }
+    };
+  } else if (content.flow) {
+    // Opens a published WhatsApp Flow. f.flowId must come from Meta's Flow
+    // Builder (see flows/README.md) — there is no working fallback inside
+    // this function; callers (utils/interactive.js#sendFlow) handle that by
+    // checking flowId before calling sendMessage at all.
+    const f = content.flow;
+    payload = {
+      messaging_product: 'whatsapp', to, type: 'interactive',
+      interactive: {
+        type: 'flow',
+        ...(buildHeader(f.header) ? { header: buildHeader(f.header) } : {}),
+        body: { text: f.body },
+        ...(f.footer ? { footer: { text: f.footer } } : {}),
+        action: {
+          name: 'flow',
+          parameters: {
+            flow_message_version: '3',
+            flow_token: f.flowToken || `${to}_${Date.now()}`,
+            flow_id: f.flowId,
+            flow_cta: f.cta || 'Start',
+            flow_action: 'navigate',
+            ...(f.screen ? { flow_action_payload: { screen: f.screen, data: f.data || {} } } : {})
+          }
+        }
+      }
+    };
+  } else if (content.template) {
+    // Raw template send, for policy-required notifications (e.g. outside
+    // the 24h customer service window). content.template must already be a
+    // valid Graph API `template` object: { name, language: { code }, components }.
+    payload = { messaging_product: 'whatsapp', to, type: 'template', template: content.template };
   } else {
     throw new Error('waCloudApi.sendMessage: unsupported content shape');
   }
