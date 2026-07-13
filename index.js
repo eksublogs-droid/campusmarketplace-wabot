@@ -35,6 +35,13 @@ const app = express();
 app.use(express.json());
 app.use(express.static(__dirname + '/public'));
 
+// FIX: reverse lookup so disconnect logs can show a human-readable reason
+// name (e.g. "restartRequired") next to the raw statusCode, not just the
+// number. Built once from Baileys' own DisconnectReason enum.
+const DISCONNECT_REASON_NAMES = Object.fromEntries(
+  Object.entries(DisconnectReason).map(([name, code]) => [code, name])
+);
+
 let sock;
 let pairingInFlight = false;
 // FIX (root cause of repeated disconnects on every redeploy): Railway starts
@@ -66,6 +73,21 @@ const SETTLE_MS_FRESH_LOGIN = 90 * 1000; // just paired via a brand new code
 const SETTLE_MS_RECONNECT = 8 * 1000;    // routine reconnect with existing creds
 let settleUntil = 0;
 
+// FIX: `isNewLogin: true` fires as a standalone event (no `connection`
+// field) the instant the pairing code is entered, on a socket WhatsApp is
+// about to force to restart. `connection: 'open'` always fires later, on
+// the brand new socket that restart creates — which never saw
+// `isNewLogin`. So this flag, checked alone, could never actually reach
+// the code that picks the settle window; every connection, including the
+// very first one after a fresh pair, was silently only ever getting the
+// short 8s window. The fix persists the moment of pairing outside the
+// socket (see markRecentPairing/getRecentPairingAt below) and treats any
+// connection that opens within this grace period as still "freshly
+// paired," since that's the highest-scrutiny window regardless of which
+// socket instance happens to be handling it. 30 min default — safe to
+// make shorter/longer later.
+const PAIRING_GRACE_MS = 30 * 60 * 1000;
+
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function jitteredBackoff() {
@@ -74,21 +96,54 @@ function jitteredBackoff() {
   return Math.round(jitter);
 }
 
+// FIX: fetchLatestWaWebVersion() previously ran on every single
+// connectToWhatsApp() call — i.e. every reconnect — hitting
+// web.whatsapp.com via axios with no timeout and no caching. A slow
+// response there stalled the entire reconnect silently, with no log line
+// (a strong candidate for a ~2m50s unexplained gap seen between boot and
+// the first logged disconnect in one run). This adds an explicit timeout
+// so a slow request can't hang a reconnect, and a short in-memory cache so
+// a version already fetched this process isn't re-fetched on every single
+// reconnect. Falls back to the last known-good cached version (or, if none
+// exists yet, Baileys' own bundled default) if the fetch fails or times
+// out — same safety net as before, just no longer a network round-trip
+// every time.
+const WA_VERSION_CACHE_MS = 6 * 60 * 60 * 1000; // 6h
+const WA_VERSION_FETCH_TIMEOUT_MS = 8000;
+let cachedWaVersion;
+let cachedWaVersionAt = 0;
+
+async function getWaVersion() {
+  const now = Date.now();
+  if (cachedWaVersion && (now - cachedWaVersionAt) < WA_VERSION_CACHE_MS) {
+    return cachedWaVersion;
+  }
+  try {
+    const { version } = await fetchLatestWaWebVersion({ timeout: WA_VERSION_FETCH_TIMEOUT_MS });
+    cachedWaVersion = version;
+    cachedWaVersionAt = now;
+    return version;
+  } catch (err) {
+    console.error(
+      `Could not fetch latest WA web version (${err.message}) — using`,
+      cachedWaVersion ? 'previously cached version.' : 'Baileys bundled default.'
+    );
+    return cachedWaVersion; // undefined on a first-ever failure -> Baileys uses its bundled default
+  }
+}
+
 async function connectToWhatsApp() {
-  const { state, saveCreds, waitForPendingSave, clearAll } = await useSupabaseAuthState();
+  const {
+    state, saveCreds, waitForPendingSave, clearAll,
+    markRecentPairing, getRecentPairingAt
+  } = await useSupabaseAuthState();
 
   // Baileys' own docs say to use the bundled default version instead of
   // fetching latest — normally correct. But the bundled default is
   // currently stale (WhiskeySockets/Baileys#1929), so WhatsApp's servers
   // reject the handshake with it right now. Fetching the live version
-  // fixes that; if the fetch itself fails, fall back to the bundled
-  // default rather than crashing the boot.
-  let version;
-  try {
-    ({ version } = await fetchLatestWaWebVersion());
-  } catch (err) {
-    console.error('Could not fetch latest WA web version, using bundled default:', err.message);
-  }
+  // fixes that; see getWaVersion() above for the timeout/caching around it.
+  const version = await getWaVersion();
 
   sock = makeWASocket({
     auth: state,
@@ -121,6 +176,12 @@ async function connectToWhatsApp() {
   // instant. Kept short (well under a couple seconds) so normal
   // menu-driven use doesn't feel sluggish.
   const rawSendMessage = sock.sendMessage.bind(sock);
+  // FIX: exposed so utils/humanize.js's sendLikeHuman() (used for the very
+  // first message to a brand-new contact) can send through this unwrapped
+  // path after doing its own, deliberately longer, first-contact typing
+  // pause — instead of going through sock.sendMessage below and getting a
+  // SECOND, shorter typing pause stacked on top of the one it just did.
+  sock.sendMessageRaw = rawSendMessage;
   const GLOBAL_MIN_DELAY_MS = 500;
   const GLOBAL_MAX_DELAY_MS = 1300;
   const GLOBAL_MIN_GAP_MS = 700;
@@ -128,6 +189,23 @@ async function connectToWhatsApp() {
   sock.sendMessage = async (jid, content, options) => {
     const isDirectChat = typeof jid === 'string' && jid.endsWith('@s.whatsapp.net');
     if (!isDirectChat) return rawSendMessage(jid, content, options);
+
+    // FIX: previously only messages triggered by an INCOMING user message
+    // were held back during the settle window (the check at the top of
+    // handleIncomingMessage, further down). Any send that isn't a reply —
+    // like the daily cron job that tells the admin a Pro listing is
+    // expiring — went out immediately even if the socket had only just
+    // reconnected, which is exactly the pattern the settle window exists
+    // to avoid. Gating the wrapped send itself instead of each individual
+    // call site closes this for every current and future send that goes
+    // through here, not just the ones remembered case by case. Re-checks
+    // in a loop in case a disconnect/reconnect happens mid-wait and pushes
+    // settleUntil further out.
+    let settleRemaining = settleUntil - Date.now();
+    while (settleRemaining > 0) {
+      await delay(settleRemaining + 250);
+      settleRemaining = settleUntil - Date.now();
+    }
 
     const now = Date.now();
     const earliestSlot = Math.max(now, lastGlobalSendAt + GLOBAL_MIN_GAP_MS);
@@ -153,10 +231,37 @@ async function connectToWhatsApp() {
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, isNewLogin } = update;
     if (isShuttingDown) return; // intentional shutdown in progress, not a real disconnect
+
+    // FIX: `isNewLogin: true` is emitted by Baileys as its own standalone
+    // event the instant a pairing code is entered — { isNewLogin: true,
+    // qr: undefined }, no `connection` field at all. WhatsApp's server then
+    // always forces this exact socket to restart right after, which builds
+    // a brand new socket/listener — so `connection: 'open'` (handled
+    // further down) always fires on a socket that never saw this event.
+    // Persisting it here, outside the socket, is what lets the open-check
+    // below still recognize "we just paired" once that new socket connects.
+    if (isNewLogin && !connection) {
+      console.log('New pairing code entered — persisting recent_pairing_at.');
+      try {
+        await markRecentPairing();
+      } catch (err) {
+        console.error('Failed to persist recent_pairing_at:', err.message);
+      }
+      return;
+    }
+
     if (connection === 'close') {
-      const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
+      // FIX: previously only statusCode was logged. Boom's own message is
+      // a safe string field (same principle as the unhandledRejection
+      // handler below — never log the raw error/session object, only
+      // vetted string fields), so this adds it plus a human-readable
+      // reason name, giving more to go on if this happens again without
+      // risking that same kind of exposure.
+      const boomError = new Boom(lastDisconnect?.error);
+      const statusCode = boomError?.output?.statusCode;
+      const reasonName = DISCONNECT_REASON_NAMES[statusCode] || 'unknown';
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      console.log(`Connection closed. statusCode: ${statusCode}. Reconnecting: ${shouldReconnect}`);
+      console.log(`Connection closed. statusCode: ${statusCode} (${reasonName}). message: ${boomError.message}. Reconnecting: ${shouldReconnect}`);
       await botStatus.setStatus('close');
       if (shouldReconnect) {
         // Make sure any in-flight creds write (e.g. from a just-issued
@@ -198,13 +303,23 @@ async function connectToWhatsApp() {
       // carrying yesterday's backoff count.
       consecutiveReconnects = 0;
 
-      // FIX: start the settle window (see comment at top of file). A fresh
-      // pairing gets a longer window than a routine reconnect with
-      // existing creds, since a brand-new device link is the higher-risk
-      // moment.
-      const settleMs = isNewLogin ? SETTLE_MS_FRESH_LOGIN : SETTLE_MS_RECONNECT;
+      // FIX: start the settle window (see PAIRING_GRACE_MS comment at top
+      // of file). `isNewLogin` is checked here too in case a future Baileys
+      // version ever does merge it into the 'open' event, but the real
+      // signal is the persisted timestamp — it survives the mandatory
+      // post-pair restart that a same-socket `isNewLogin` check can't.
+      let recentPairing = !!isNewLogin;
+      if (!recentPairing) {
+        try {
+          const pairedAt = await getRecentPairingAt();
+          recentPairing = !!pairedAt && (Date.now() - pairedAt) < PAIRING_GRACE_MS;
+        } catch (err) {
+          console.error('Could not check recent pairing timestamp:', err.message);
+        }
+      }
+      const settleMs = recentPairing ? SETTLE_MS_FRESH_LOGIN : SETTLE_MS_RECONNECT;
       settleUntil = Date.now() + settleMs;
-      console.log(`Settle window active for ${Math.round(settleMs / 1000)}s before automated replies begin (isNewLogin: ${!!isNewLogin}).`);
+      console.log(`Settle window active for ${Math.round(settleMs / 1000)}s before automated replies begin (recentPairing: ${recentPairing}).`);
 
       // FIX: explicitly initialize presence once, right after the socket
       // opens, before any composing/paused updates are sent later. Some
