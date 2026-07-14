@@ -5,6 +5,7 @@ const { buildMenu } = require('../utils/menu');
 const { sendButtonMenu } = require('../utils/buttons');
 const { sendListMenu, sendButtons, sendCtaUrl } = require('../utils/interactive');
 const { sendLikeHuman, pickVariant } = require('../utils/humanize');
+const { resolveMediaUrl } = require('../utils/media');
 
 const MAIN_OPTIONS = [
   { label: '🛍️ Buy Items', description: 'Browse listings for sale' },
@@ -128,6 +129,7 @@ async function handleBrowsingChoice(sock, jid, text, user) {
 }
 
 async function sendProductCard(sock, jid, product, user) {
+  const galleryLink = `https://eduglobalforge.com/pastquestions/listing?id=${product.id}`;
   const caption =
     `${product.is_premium ? '💎 *PRO LISTING*\n' : ''}` +
     `📦 *${product.name}*\n` +
@@ -135,15 +137,25 @@ async function sendProductCard(sock, jid, product, user) {
     `⚙️ Condition: ${product.condition || 'N/A'}\n` +
     `📝 ${product.description || 'No description'}\n` +
     `📍 ${product.city || ''}, ${product.state || ''}\n` +
-    `🚚 Dropoff: ${product.door_dropoff ? 'Yes' : 'No'} | 🚶 Pickup: ${product.door_pickup ? 'Yes' : 'No'}`;
+    `🚚 Dropoff: ${product.door_dropoff ? 'Yes' : 'No'} | 🚶 Pickup: ${product.door_pickup ? 'Yes' : 'No'}\n` +
+    `🔗 See all photos: ${galleryLink}`;
 
   const firstMedia = Array.isArray(product.media) && product.media[0];
+
+  // firstMedia.file_id is a Telegram file identifier, not a URL — it has
+  // to be resolved to a fresh download link (valid ~1hr) right here,
+  // every time, rather than stored/reused from an earlier resolve.
+  let imageLink;
+  if (firstMedia && firstMedia.type === 'photo' && firstMedia.file_id) {
+    try { imageLink = await resolveMediaUrl(firstMedia.file_id); } catch (_) { imageLink = undefined; }
+  }
+
   const buttons = [{ id: '1', title: '💬 Contact Seller' }, { id: '0', title: '⬅️ Back' }];
 
   // sendButtons handles its own fallback chain internally (interactive ->
   // image+text -> plain text), so a single call covers the whole card.
   await sendButtons(sock, jid, caption, buttons, {
-    header: firstMedia && firstMedia.type === 'photo' ? { type: 'image', link: firstMedia.url } : undefined
+    header: imageLink ? { type: 'image', link: imageLink } : undefined
   });
 
   setSession(jid, 'viewing_product');
