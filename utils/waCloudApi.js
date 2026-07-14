@@ -136,10 +136,17 @@ async function sendMessage(jid, content) {
       }
     };
   } else if (content.flow) {
-    // Opens a published WhatsApp Flow. f.flowId must come from Meta's Flow
-    // Builder (see flows/README.md) — there is no working fallback inside
-    // this function; callers (utils/interactive.js#sendFlow) handle that by
+    // Opens a WhatsApp Flow. f.flowId must come from Meta's Flow Builder
+    // (see flows/README.md) — there is no working fallback inside this
+    // function; callers (utils/interactive.js#sendFlow) handle that by
     // checking flowId before calling sendMessage at all.
+    //
+    // `mode` matters: a Flow still in Draft state (not yet published in
+    // WhatsApp Manager) is REJECTED by Meta with a "Integrity requirements
+    // not met" error unless the request explicitly says mode: 'draft'.
+    // See: https://developers.facebook.com/documentation/business-messaging/whatsapp/flows/guides/testingdebugging#send-draft-flow-to-your-device
+    // Default here is 'published' (the normal case once the Flow is live);
+    // pass f.mode: 'draft' from the caller while testing an unpublished Flow.
     const f = content.flow;
     payload = {
       messaging_product: 'whatsapp', to, type: 'interactive',
@@ -152,6 +159,7 @@ async function sendMessage(jid, content) {
           name: 'flow',
           parameters: {
             flow_message_version: '3',
+            mode: f.mode || 'published',
             flow_token: f.flowToken || `${to}_${Date.now()}`,
             flow_id: f.flowId,
             flow_cta: f.cta || 'Start',
