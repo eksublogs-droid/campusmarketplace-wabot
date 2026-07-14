@@ -1,6 +1,7 @@
 const productRepo = require('../repos/productRepo');
 const settingsRepo = require('../repos/settingsRepo');
 const paymentRepo = require('../repos/paymentRepo');
+const { deleteFiles } = require('../utils/media');
 
 function isAdmin(phoneOrJid) {
   const digits = (phoneOrJid || '').replace(/\D/g, '');
@@ -129,6 +130,7 @@ async function rejectListing(sock, jid, id, reason) {
   const product = await productRepo.getProductById(id);
   if (!product) return sock.sendMessage(jid, { text: '❌ Listing not found.' });
   await productRepo.updateProduct(id, { status: 'rejected' });
+  await deleteFiles(product.media, 'product-media').catch(() => {});
   await sock.sendMessage(jid, { text: `🚫 Rejected: ${product.name}` });
 
   if (product.seller_whatsapp) {
@@ -163,6 +165,7 @@ async function approveReceipt(sock, jid, id) {
   if (!receipt) return sock.sendMessage(jid, { text: '❌ Receipt not found.' });
 
   await paymentRepo.updateReceipt(id, { status: 'approved' });
+  await deleteFiles([receipt.receipt_url], 'payment-receipts').catch(() => {});
   const expiresAt = new Date(Date.now() + receipt.days * 24 * 60 * 60 * 1000).toISOString();
   await productRepo.updateProduct(receipt.product_id, { is_premium: true, premium_expires_at: expiresAt });
 
@@ -177,6 +180,7 @@ async function rejectReceipt(sock, jid, id, reason) {
   if (!receipt) return sock.sendMessage(jid, { text: '❌ Receipt not found.' });
 
   await paymentRepo.updateReceipt(id, { status: 'rejected', reject_reason: reason });
+  await deleteFiles([receipt.receipt_url], 'payment-receipts').catch(() => {});
   await sock.sendMessage(jid, { text: `🚫 Receipt rejected.` });
   await sock.sendMessage(receipt.user_whatsapp_id, {
     text: `❌ We couldn't verify your payment.\nReason: ${reason}\n\nPlease double-check the transfer and resend a clear screenshot, or contact admin directly.`
