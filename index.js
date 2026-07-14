@@ -395,6 +395,13 @@ app.get('/api/listing/:id', async (req, res) => {
 // via /api/upload-media, which stores them in the Telegram channel and
 // returns a file_id — we only receive those file_id + type pairs here,
 // not the actual image bytes.
+//
+// The form (egf-sell-form-snippet.php) now sends the FULL 20-question
+// field set, not just the original handful — see the boolStr/lines below
+// for every field it can send. Extra columns (original_price, capital,
+// lga, was_repaired, repairs_details, receipt_available,
+// warranty_remaining, warranty_duration, original_packaging) must exist
+// on the products table — see the ALTER TABLE block added to schema.sql.
 app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
   try {
     const b = req.body;
@@ -409,14 +416,41 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields (itemTitle, sellingPrice)' });
     }
 
+    const originalPrice = parseInt(String(b.originalPrice || '').replace(/[^\d]/g, ''), 10) || 0;
+    const lowestPrice = parseInt(String(b.lowestPrice || '').replace(/[^\d]/g, ''), 10) || 0;
+    const negotiable = String(b.negotiable) === 'true';
+    const hasDefects = String(b.hasDefects) === 'true';
+    const wasRepaired = String(b.wasRepaired) === 'true';
+    const doorDropoff = String(b.doorDropoff) === 'true';
+    const doorPickup = String(b.doorPickup) === 'true';
+
     const product = await productRepo.createProduct({
       name: b.itemTitle,
       category: b.category,
+      subcategory: b.subcategory || '',
+      brand: b.brand || '',
       condition: b.condition,
       selling_price: sellingPrice,
+      original_price: originalPrice,
+      negotiable,
+      lowest_price: lowestPrice,
       description: b.description || '',
+      used_duration: b.usedDuration || '',
+      has_defects: hasDefects,
+      defects_details: b.defectsDetails || '',
+      was_repaired: wasRepaired,
+      repairs_details: b.repairsDetails || '',
+      reason_for_selling: b.reasonForSelling || '',
       state: b.state,
+      capital: b.capital || '',
+      lga: b.lga || '',
       city: b.city,
+      door_dropoff: doorDropoff,
+      door_pickup: doorPickup,
+      receipt_available: b.receiptAvailable || '',
+      warranty_remaining: b.warrantyRemaining || '',
+      warranty_duration: b.warrantyDuration || '',
+      original_packaging: b.originalPackaging || '',
       seller_whatsapp: phone,
       media,
       posted_by: 'user',
@@ -425,36 +459,54 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
 
     const adminJid = `${process.env.ADMIN_WHATSAPP}@s.whatsapp.net`;
     const priceStr = `₦${Number(product.selling_price).toLocaleString()}`;
+    const origPriceStr = originalPrice ? `₦${originalPrice.toLocaleString()}` : '-';
     const galleryLink = `${LISTING_GALLERY_URL}?id=${product.id}`;
+    const yesNo = (v) => (v ? 'Yes' : 'No');
 
-    const notifyText =
-      `🆕 *New Listing Pending Review*\n\n` +
+    // Full detail block — shared by both the seller and admin messages.
+    // Sent as a plain text message (4096-char limit), never as an
+    // interactive "buttons" body (1024-char limit), since 20 fields of
+    // detail routinely runs past that.
+    const detailLines =
       `📦 *Item:* ${product.name}\n` +
-      `🗂 *Category:* ${product.category || '-'}\n` +
+      `🗂 *Category:* ${product.category || '-'} › ${product.subcategory || '-'}\n` +
+      `🏷 *Brand:* ${product.brand || '-'}\n` +
       `⚙️ *Condition:* ${product.condition || '-'}\n` +
-      `💰 *Price:* ${priceStr}\n` +
       `📝 *Description:* ${product.description || '-'}\n` +
-      `📍 *Location:* ${product.city}, ${product.state}\n` +
-      `👤 *Seller:* ${phone}\n` +
-      `🖼 *Photos:* ${media.length}\n` +
+      `💰 *Selling Price:* ${priceStr}\n` +
+      `🧾 *Original Price:* ${origPriceStr}\n` +
+      `🤝 *Negotiable:* ${yesNo(negotiable)}${negotiable && lowestPrice ? ` (lowest: ₦${lowestPrice.toLocaleString()})` : ''}\n` +
+      `⏳ *Used For:* ${product.used_duration || '-'}\n` +
+      `⚠️ *Defects:* ${hasDefects ? (product.defects_details || 'Yes') : 'None'}\n` +
+      `🔧 *Repairs:* ${wasRepaired ? (product.repairs_details || 'Yes') : 'None'}\n` +
+      `❓ *Reason for Selling:* ${product.reason_for_selling || '-'}\n` +
+      `📍 *Location:* ${product.city}, ${product.lga ? product.lga + ', ' : ''}${product.state}${product.capital ? ' (Capital: ' + product.capital + ')' : ''}\n` +
+      `🚚 *Door Dropoff:* ${yesNo(doorDropoff)}\n` +
+      `🤝 *Door Pickup:* ${yesNo(doorPickup)}\n` +
+      `🧾 *Receipt Available:* ${product.receipt_available || 'Not answered'}\n` +
+      `🛡 *Warranty:* ${product.warranty_remaining === 'yes' ? (product.warranty_duration || 'Yes') : (product.warranty_remaining || 'Not answered')}\n` +
+      `📦 *Original Packaging:* ${product.original_packaging || 'Not answered'}\n` +
+      `🖼 *Photos/Videos:* ${media.length}\n` +
       `🔗 *See all photos:* ${galleryLink}`;
 
+    // ---- To the seller: full detail, plain text (no length limit issue) ----
     await waCloudApi.sendMessage(`${phone}@s.whatsapp.net`, {
       text:
-        `✅ *Listing submitted for review!*\n\n` +
-        `📦 *Item:* ${product.name}\n` +
-        `🗂 *Category:* ${product.category || '-'}\n` +
-        `⚙️ *Condition:* ${product.condition || '-'}\n` +
-        `💰 *Price:* ${priceStr}\n` +
-        `📝 *Description:* ${product.description || '-'}\n` +
-        `📍 *Location:* ${product.city}, ${product.state}\n` +
-        `🔗 *See all your photos:* ${galleryLink}\n\n` +
+        `✅ *Listing submitted for review!*\n\n${detailLines}\n\n` +
         `Our team will review it shortly. You'll get a message here once it's approved. Reply *menu* to return.`
     }).catch(() => {});
 
+    // ---- To admin: full detail as plain text first ... ----
+    await waCloudApi.sendMessage(adminJid, {
+      text: `🆕 *New Listing Pending Review*\n\n${detailLines}\n\n👤 *Seller:* ${phone}`
+    }).catch(() => {});
+
+    // ...then a short separate Approve/Reject buttons message (interactive
+    // message bodies are capped at ~1024 chars by WhatsApp, so it can't
+    // carry the full detail block above without risking silent failure).
     await waCloudApi.sendMessage(adminJid, {
       buttons: {
-        body: notifyText,
+        body: `Approve or reject "${product.name}" (${priceStr}) from ${phone}?`,
         footer: 'Tap to review, or type the command manually.',
         buttons: [
           { id: `approve ${product.id}`, title: '✅ Approve' },
