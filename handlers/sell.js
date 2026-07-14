@@ -68,11 +68,18 @@ async function startSellFlow(sock, jid, user) {
   // Flow is a pure upgrade, never a requirement.
   const flowId = process.env.WA_SELL_FLOW_ID;
   if (flowId) {
+    // WA_SELL_FLOW_MODE controls whether this is sent as a draft-testing
+    // send or a real published send. Meta rejects draft Flows sent without
+    // mode: 'draft' with "Integrity requirements not met" — so default to
+    // 'draft' here (safe for testing) and switch the env var to
+    // 'published' only once the Flow is actually published in WA Manager.
+    const flowMode = process.env.WA_SELL_FLOW_MODE || 'draft';
     const flowToken = `sell_${user.id}_${Date.now()}`;
     updateSession(jid, { sellFlowToken: flowToken });
     const launched = await sendFlow(sock, jid, {
       flowId,
       flowToken,
+      mode: flowMode,
       bodyText: '📦 Let\'s list your item! Fill in the quick form below.',
       cta: 'Start Selling'
     });
