@@ -42,13 +42,15 @@ async function askStep(sock, jid, stepDef) {
 async function startSellFlow(sock, jid, user) {
   updateSession(jid, { sellData: {}, sellMedia: [] });
 
-  // Preferred path: the mobile-friendly "one page, all fields" form
-  // (public/sell-form.html), opened via a CTA link. Works today with no
-  // Meta business verification needed, unlike native Flows below.
-  const siteUrl = process.env.PUBLIC_SITE_URL;
-  if (siteUrl) {
+  // Preferred path: the mobile-friendly "one page, all fields" form, now
+  // hosted on eduglobalforge.com (a WordPress Custom HTML page) instead of
+  // this server's own /public/sell-form.html. The form itself calls back
+  // to THIS server's /api/upload-media and /api/submit-listing (that's
+  // what the CORS block in index.js is for).
+  const SELL_FORM_URL = 'https://eduglobalforge.com/pastquestions/sellitems';
+  if (SELL_FORM_URL) {
     const phone = jid.split('@')[0];
-    const formUrl = `${siteUrl.replace(/\/$/, '')}/sell-form.html?userId=${encodeURIComponent(phone)}`;
+    const formUrl = `${SELL_FORM_URL}?userId=${encodeURIComponent(phone)}`;
     const sent = await sendCtaUrl(
       sock, jid,
       '📦 Let\'s list your item! Fill in the quick form below — everything on one page.',
@@ -147,8 +149,8 @@ async function handleSellMedia(sock, jid, buffer, mimeType) {
   }
 
   try {
-    const url = await uploadBuffer(buffer, mimeType, 'product-media');
-    media.push({ url, type: mimeType.includes('video') ? 'video' : 'photo' });
+    const fileId = await uploadBuffer(buffer, mimeType, 'product-media');
+    media.push({ file_id: fileId, type: mimeType.includes('video') ? 'video' : 'photo' });
     updateSession(jid, { sellMedia: media });
     await sock.sendMessage(jid, { text: `✅ Media ${media.length}/5 received. Send more or reply *done*.` });
   } catch (err) {
@@ -205,18 +207,34 @@ async function finishSellFlow(sock, jid, user) {
   });
   clearSession(jid);
 
+  const priceStr = `₦${Number(product.selling_price).toLocaleString()}`;
+  const galleryLink = `https://eduglobalforge.com/pastquestions/listing?id=${product.id}`;
+
   await sock.sendMessage(jid, {
     text:
       `✅ *Listing submitted for review!*\n\n` +
-      `📦 ${product.name}\n💰 ₦${Number(product.selling_price).toLocaleString()}\n\n` +
+      `📦 *Item:* ${product.name}\n` +
+      `🗂 *Category:* ${product.category || '-'}\n` +
+      `⚙️ *Condition:* ${product.condition || '-'}\n` +
+      `💰 *Price:* ${priceStr}\n` +
+      `📝 *Description:* ${product.description || '-'}\n` +
+      `📍 *Location:* ${product.city}, ${product.state}\n` +
+      `🔗 *See all your photos:* ${galleryLink}\n\n` +
       `Our team will review it shortly. You'll get a message here once it's approved. Reply *menu* to return.`
   });
 
   const adminJid = `${process.env.ADMIN_WHATSAPP}@s.whatsapp.net`;
   const notifyText =
     `🆕 *New Listing Pending Review*\n\n` +
-    `📦 ${product.name}\n💰 ₦${Number(product.selling_price).toLocaleString()}\n📍 ${product.city}, ${product.state}\n` +
-    `👤 Seller: ${user.name} (${user.phone})`;
+    `📦 *Item:* ${product.name}\n` +
+    `🗂 *Category:* ${product.category || '-'}\n` +
+    `⚙️ *Condition:* ${product.condition || '-'}\n` +
+    `💰 *Price:* ${priceStr}\n` +
+    `📝 *Description:* ${product.description || '-'}\n` +
+    `📍 *Location:* ${product.city}, ${product.state}\n` +
+    `👤 *Seller:* ${user.name} (${user.phone})\n` +
+    `🖼 *Photos:* ${sellMedia.length}\n` +
+    `🔗 *See all photos:* ${galleryLink}`;
 
   // Reply buttons let the admin approve/reject with a tap — the button
   // `id` is the exact same text command handlers/admin.js already parses,
