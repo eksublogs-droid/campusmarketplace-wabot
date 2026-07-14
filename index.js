@@ -35,6 +35,25 @@ const app = express();
 app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.static(__dirname + '/public'));
 
+// CORS: the sell form lives on eduglobalforge.com (a different origin from
+// this Railway server), so its browser fetch() calls to /api/upload-media
+// and /api/submit-listing need these headers or the browser blocks them.
+// No 'cors' npm package used on purpose — avoids touching package-lock.json.
+const ALLOWED_ORIGINS = [
+  'https://eduglobalforge.com',
+  'https://www.eduglobalforge.com'
+];
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-admin-key');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 // A minimal `sock`-shaped object so every handler/repo call written against
 // the old Baileys socket (sock.sendMessage, sock.sendPresenceUpdate, ...)
 // keeps working completely unchanged.
@@ -312,14 +331,70 @@ ${err.validationErrors ? JSON.stringify(err.validationErrors, null, 2) : ''}
 });
 
 const supabase = require('./utils/supabaseClient');
+const { uploadBuffer, resolveMediaUrl } = require('./utils/media');
+const LISTING_GALLERY_URL = 'https://eduglobalforge.com/pastquestions/listing';
+const uploadMedia = multer(); // memory storage — no dest given, so files stay as req.file.buffer
 
-// Receives submissions from public/sell-form.html (the mobile-friendly
-// "one page, all fields" listing form). userId is the WhatsApp phone
-// number passed in the form's URL (?userId=<phone>). Photos/videos are
-// uploaded separately by the form to Telegram's existing media storage
-// before this runs — we only receive their file_id + type here, not the
-// actual files. See earlier chat note: media.url vs media.file_id is an
-// open question for buyer-side image display and may need revisiting.
+// Receives one photo/video at a time from the sell form (WordPress or
+// sell-form.html), uploads it straight to Supabase Storage, and returns
+// its public URL. The form collects these URLs into preuploadedMedia and
+// sends that along with /api/submit-listing below.
+app.post('/api/upload-media', uploadMedia.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file received' });
+    const fileId = await uploadBuffer(req.file.buffer, req.file.mimetype, 'product-media');
+    const type = req.file.mimetype.includes('video') ? 'video' : 'photo';
+    res.json({ ok: true, file_id: fileId, type });
+  } catch (err) {
+    console.error('upload-media error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Public, no-login endpoint that powers the WordPress gallery page
+// ([egf_listing_gallery] shortcode). Only returns the item's own details
+// and resolved photo/video links — never the seller's phone number.
+app.get('/api/listing/:id', async (req, res) => {
+  try {
+    const product = await productRepo.getProductById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Listing not found' });
+
+    const rawMedia = Array.isArray(product.media) ? product.media : [];
+    const media = [];
+    for (const m of rawMedia) {
+      if (!m || !m.file_id) continue;
+      try {
+        const url = await resolveMediaUrl(m.file_id);
+        media.push({ url, type: m.type === 'video' ? 'video' : 'photo' });
+      } catch (_) {
+        // one bad/expired file_id shouldn't break the whole gallery
+      }
+    }
+
+    res.json({
+      ok: true,
+      name: product.name,
+      category: product.category,
+      condition: product.condition,
+      selling_price: product.selling_price,
+      description: product.description,
+      state: product.state,
+      city: product.city,
+      media
+    });
+  } catch (err) {
+    console.error('listing gallery error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Receives submissions from the sell form — now hosted on
+// eduglobalforge.com (public/egf-sell-form.html was the older,
+// Railway-hosted version). userId is the WhatsApp phone number passed in
+// the form's URL (?userId=<phone>). Photos/videos are uploaded separately
+// via /api/upload-media, which stores them in the Telegram channel and
+// returns a file_id — we only receive those file_id + type pairs here,
+// not the actual image bytes.
 app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
   try {
     const b = req.body;
@@ -349,13 +424,32 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
     });
 
     const adminJid = `${process.env.ADMIN_WHATSAPP}@s.whatsapp.net`;
+    const priceStr = `₦${Number(product.selling_price).toLocaleString()}`;
+    const galleryLink = `${LISTING_GALLERY_URL}?id=${product.id}`;
+
     const notifyText =
       `🆕 *New Listing Pending Review*\n\n` +
-      `📦 ${product.name}\n💰 ₦${Number(product.selling_price).toLocaleString()}\n📍 ${product.city}, ${product.state}\n` +
-      `👤 Seller: ${phone}`;
+      `📦 *Item:* ${product.name}\n` +
+      `🗂 *Category:* ${product.category || '-'}\n` +
+      `⚙️ *Condition:* ${product.condition || '-'}\n` +
+      `💰 *Price:* ${priceStr}\n` +
+      `📝 *Description:* ${product.description || '-'}\n` +
+      `📍 *Location:* ${product.city}, ${product.state}\n` +
+      `👤 *Seller:* ${phone}\n` +
+      `🖼 *Photos:* ${media.length}\n` +
+      `🔗 *See all photos:* ${galleryLink}`;
 
     await waCloudApi.sendMessage(`${phone}@s.whatsapp.net`, {
-      text: `✅ *Listing submitted for review!*\n\n📦 ${product.name}\n💰 ₦${Number(product.selling_price).toLocaleString()}\n\nOur team will review it shortly.`
+      text:
+        `✅ *Listing submitted for review!*\n\n` +
+        `📦 *Item:* ${product.name}\n` +
+        `🗂 *Category:* ${product.category || '-'}\n` +
+        `⚙️ *Condition:* ${product.condition || '-'}\n` +
+        `💰 *Price:* ${priceStr}\n` +
+        `📝 *Description:* ${product.description || '-'}\n` +
+        `📍 *Location:* ${product.city}, ${product.state}\n` +
+        `🔗 *See all your photos:* ${galleryLink}\n\n` +
+        `Our team will review it shortly. You'll get a message here once it's approved. Reply *menu* to return.`
     }).catch(() => {});
 
     await waCloudApi.sendMessage(adminJid, {
