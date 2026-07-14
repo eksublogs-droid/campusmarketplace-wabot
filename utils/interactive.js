@@ -155,11 +155,11 @@ async function sendCtaUrl(sock, jid, bodyText, displayText, url, opts = {}) {
 // If flowId isn't configured, or the send fails, returns false so the
 // caller can transparently fall back to a normal chat conversation — Flows
 // are additive here, never a hard requirement.
-async function sendFlow(sock, jid, { flowId, flowToken, bodyText, cta, screen, data, footer, header }) {
+async function sendFlow(sock, jid, { flowId, flowToken, bodyText, cta, screen, data, footer, header, mode }) {
   if (!flowId) return false;
   try {
     await sock.sendMessage(jid, {
-      flow: { body: bodyText, footer, header, flowId, flowToken, cta, screen, data }
+      flow: { body: bodyText, footer, header, flowId, flowToken, cta, screen, data, mode }
     });
     return true;
   } catch (err) {
