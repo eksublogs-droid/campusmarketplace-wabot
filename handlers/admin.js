@@ -129,7 +129,7 @@ async function approveListing(sock, jid, id) {
 async function rejectListing(sock, jid, id, reason) {
   const product = await productRepo.getProductById(id);
   if (!product) return sock.sendMessage(jid, { text: '❌ Listing not found.' });
-  await productRepo.updateProduct(id, { status: 'rejected' });
+  await productRepo.updateProduct(id, { status: 'rejected', reject_reason: reason });
   await deleteFiles(product.media, 'product-media').catch(() => {});
   await sock.sendMessage(jid, { text: `🚫 Rejected: ${product.name}` });
 
@@ -146,6 +146,11 @@ async function markSold(sock, jid, id) {
   if (!product) return sock.sendMessage(jid, { text: '❌ Listing not found.' });
   await productRepo.updateProduct(id, { status: 'sold', sold_at: new Date().toISOString() });
   await sock.sendMessage(jid, { text: `✅ Marked sold: ${product.name}` });
+
+  if (product.seller_whatsapp) {
+    const sellerJid = `${product.seller_whatsapp.replace(/\D/g, '')}@s.whatsapp.net`;
+    await sock.sendMessage(sellerJid, { text: `🎉 Your listing *${product.name}* has been marked as sold. Congrats!` }).catch(() => {});
+  }
 }
 
 async function showPendingReceipts(sock, jid) {
