@@ -8,7 +8,7 @@ const { sendLikeHuman, pickVariant } = require('../utils/humanize');
 const { resolveMediaUrl } = require('../utils/media');
 
 const MAIN_OPTIONS = [
-  { label: '🛒 Buy Used Items', description: 'Browse affordable second-hand items from students near you' },
+  { label: '💰 Buy Used Items', description: 'Browse affordable second-hand items from students near you' },
   { label: '💰 Sell Used Items', description: 'List an item you no longer need and reach buyers on campus' },
   { label: '📋 My Listings', description: 'View your posted items' },
   { label: '💎 Upgrade to Pro', description: 'Pin a listing to the top' },
@@ -32,11 +32,69 @@ const WELCOME_VARIANTS = [
   '👋 Welcome aboard — *EduGlobalForge* here!\n\nMind sharing your *name* and *Gmail address*? You can send them together like this:\n📌 _John Doe, abcd1234@gmail.com_\n\nOr on separate lines:\n📌 _John Doe_\n📌 _abcd1234@gmail.com_'
 ];
 
+// Generic fallback — used only when we truly have nothing to go on
+// (empty message, or no name/email-like content at all).
 const DETAILS_RETRY_TEXT =
   '❌ I couldn\'t read that. Please send your *name* and *Gmail address* in one of these formats:\n\n' +
   '📌 _John Doe, abcd1234@gmail.com_\n\n' +
   'or\n\n' +
   '📌 _John Doe_\n📌 _abcd1234@gmail.com_';
+
+const FORMAT_HINT =
+  '📌 _John Doe, abcd1234@gmail.com_\n\n' +
+  'or\n\n' +
+  '📌 _John Doe_\n📌 _abcd1234@gmail.com_';
+
+function nameOnlyRetryText(name) {
+  return `Hi *${name}*! I got your name, but I still need your *Gmail address* too.\n\n` +
+    `Please resend both together in one of these formats:\n\n${FORMAT_HINT}`;
+}
+
+function emailOnlyRetryText() {
+  return `📧 Got your email — but I still need your *name* too.\n\n` +
+    `Please resend both together in one of these formats:\n\n${FORMAT_HINT}`;
+}
+
+function wrongFormatRetryText(nameGuess) {
+  const greeting = nameGuess ? `Almost there, *${nameGuess}*!` : 'Almost there!';
+  return `${greeting} You used the wrong format.\n\n` +
+    `Please separate your *name* and *Gmail address* with a comma, or put them on two lines:\n\n${FORMAT_HINT}`;
+}
+
+// Pulls a usable email token out of raw free text, even if the rest of
+// the message is messy (wrong separator, extra words, etc).
+function extractEmailToken(raw) {
+  const m = raw.match(/[^\s,]+@[^\s,]+/);
+  return m ? m[0] : null;
+}
+
+// Strips leftover punctuation/whitespace from a name guess after the
+// email token (and any comma) has been removed from the raw input.
+function cleanupNameGuess(str) {
+  return str.replace(/\n/g, ' ').replace(/,/g, ' ').replace(/\s+/g, ' ')
+    .trim().replace(/^[\s,.\-]+|[\s,.\-]+$/g, '').trim();
+}
+
+// When the strict parser fails, figure out *why* so we can give a
+// specific retry message instead of a generic one.
+// Returns { type: 'empty' | 'name_only' | 'email_only' | 'wrong_format', nameGuess }
+function classifyFailedInput(raw) {
+  if (!raw) return { type: 'empty', nameGuess: null };
+
+  const emailToken = extractEmailToken(raw);
+  if (!emailToken) {
+    // No "@" at all — whatever they sent is presumably just a name.
+    const nameGuess = cleanupNameGuess(raw);
+    return nameGuess ? { type: 'name_only', nameGuess } : { type: 'empty', nameGuess: null };
+  }
+
+  const remainder = cleanupNameGuess(raw.split(emailToken).join(''));
+  if (!remainder) return { type: 'email_only', nameGuess: null };
+
+  // There's both an email-like token and leftover text — they likely
+  // included both name and email but with the wrong separator/format.
+  return { type: 'wrong_format', nameGuess: remainder };
+}
 
 // Shown when the user taps Edit — a plain re-ask, not an error, since
 // nothing actually went wrong the first time.
@@ -52,6 +110,7 @@ async function askName(sock, jid) {
 }
 
 // Accepts "Name, email" on one line, or "Name" / "email" on two lines.
+// Nothing else — no other separator is treated as valid.
 // Returns { name, email } or null if the shape can't be parsed.
 function parseNameAndEmail(text) {
   const raw = (text || '').trim();
@@ -81,6 +140,18 @@ async function handleDetailsInput(sock, jid, text, user) {
   const emailValid = parsed && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parsed.email);
 
   if (!parsed || !emailValid) {
+    const raw = (text || '').trim();
+    const { type, nameGuess } = classifyFailedInput(raw);
+
+    if (type === 'name_only') {
+      return sock.sendMessage(jid, { text: nameOnlyRetryText(nameGuess) });
+    }
+    if (type === 'email_only') {
+      return sock.sendMessage(jid, { text: emailOnlyRetryText() });
+    }
+    if (type === 'wrong_format') {
+      return sock.sendMessage(jid, { text: wrongFormatRetryText(nameGuess) });
+    }
     return sock.sendMessage(jid, { text: DETAILS_RETRY_TEXT });
   }
 
