@@ -8,54 +8,145 @@ const { sendLikeHuman, pickVariant } = require('../utils/humanize');
 const { resolveMediaUrl } = require('../utils/media');
 
 const MAIN_OPTIONS = [
-  { label: '🛍️ Buy Items', description: 'Browse listings for sale' },
-  { label: '💰 Sell an Item', description: 'List something to sell' },
+  { label: '🛒 Buy Used Items', description: 'Browse affordable second-hand items from students near you' },
+  { label: '💰 Sell Used Items', description: 'List an item you no longer need and reach buyers on campus' },
   { label: '📋 My Listings', description: 'View your posted items' },
   { label: '💎 Upgrade to Pro', description: 'Pin a listing to the top' },
   { label: '❓ Help', description: 'How to use this bot' }
 ];
 
+// Only this number ever sees/can use the "Reset My Account" option —
+// it's for the person testing the bot to replay the welcome/onboarding
+// flow, not a feature for real users.
+const TEST_RESET_PHONE = '2347043701799';
+function isTestResetNumber(phone) {
+  return (phone || '').replace(/\D/g, '') === TEST_RESET_PHONE;
+}
+
 // Several phrasings for the very first message a new contact gets — picked
 // at random so it isn't a byte-identical template every time.
 const WELCOME_VARIANTS = [
-  '👋 Welcome to *CampusMarketplace*!\n\nWhat should I call you? (your first name)',
-  '👋 Hey, thanks for reaching out — this is *CampusMarketplace*!\n\nWhat\'s your first name?',
-  '👋 Hi there! You\'ve reached *CampusMarketplace*.\n\nWhat should I call you? (first name is fine)',
-  '👋 Welcome aboard — *CampusMarketplace* here!\n\nMind sharing your first name?'
+  '👋 Welcome to *EduGlobalForge*!\n\nTo get started, please send me your *name* and *Gmail address*.\n\nYou can write them together on one line, separated by a comma:\n📌 _Jane, abcd1234@gmail.com_\n\nOr on two separate lines:\n📌 _Jane_\n📌 _abcd1234@gmail.com_\n\nEither format works fine — just send whichever is easier for you.',
+  '👋 Hey, thanks for reaching out — this is *EduGlobalForge*!\n\nPlease send your *name* and *Gmail address* so I can set up your account.\n\nOne line, comma-separated:\n📌 _Jane, abcd1234@gmail.com_\n\nOr two lines:\n📌 _Jane_\n📌 _abcd1234@gmail.com_\n\nAny of the two formats is fine.',
+  '👋 Hi there! You\'ve reached *EduGlobalForge*.\n\nFirst, I\'ll need your *name* and *Gmail address*. You can send them either:\n\n1️⃣ On one line, separated by a comma:\n📌 _Jane, abcd1234@gmail.com_\n\n2️⃣ Or on two lines:\n📌 _Jane_\n📌 _abcd1234@gmail.com_\n\nWhichever is easier for you works.',
+  '👋 Welcome aboard — *EduGlobalForge* here!\n\nMind sharing your *name* and *Gmail address*? You can send them together like this:\n📌 _Jane, abcd1234@gmail.com_\n\nOr on separate lines:\n📌 _Jane_\n📌 _abcd1234@gmail.com_'
 ];
 
+const DETAILS_RETRY_TEXT =
+  '❌ I couldn\'t read that. Please send your *name* and *Gmail address* in one of these formats:\n\n' +
+  '📌 _Jane, abcd1234@gmail.com_\n\n' +
+  'or\n\n' +
+  '📌 _Jane_\n📌 _abcd1234@gmail.com_';
+
 async function askName(sock, jid) {
-  setSession(jid, 'awaiting_name');
+  setSession(jid, 'awaiting_details');
   await sendLikeHuman(sock, jid, pickVariant(WELCOME_VARIANTS));
 }
 
-async function handleNameInput(sock, jid, text, user) {
-  const name = (text || '').trim();
-  if (!name) return sock.sendMessage(jid, { text: 'Please type your name.' });
-  const updated = await userRepo.updateUser(user.id, { name });
-  setSession(jid, 'awaiting_email');
-  await sock.sendMessage(jid, { text: `Nice to meet you, ${name}! 📧 What's your email address? (used for order confirmations)` });
-  return updated;
+// Accepts "Name, email" on one line, or "Name" / "email" on two lines.
+// Returns { name, email } or null if the shape can't be parsed.
+function parseNameAndEmail(text) {
+  const raw = (text || '').trim();
+  if (!raw) return null;
+
+  if (raw.includes(',')) {
+    const idx = raw.indexOf(',');
+    const name = raw.slice(0, idx).trim();
+    const email = raw.slice(idx + 1).trim();
+    if (name && email) return { name, email };
+    return null;
+  }
+
+  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length >= 2) {
+    // Whichever line contains "@" is the email; the other is the name —
+    // covers both "name then email" and "email then name" ordering.
+    const emailLine = lines.find(l => l.includes('@'));
+    const nameLine = lines.find(l => l !== emailLine);
+    if (emailLine && nameLine) return { name: nameLine, email: emailLine };
+  }
+  return null;
 }
 
-async function handleEmailInput(sock, jid, text, user) {
-  const email = (text || '').trim();
-  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-  if (!valid) return sock.sendMessage(jid, { text: '❌ That doesn\'t look like a valid email. Try again:' });
-  const updated = await userRepo.updateUser(user.id, { email, email_submitted: true });
-  clearSession(jid);
-  await showMainMenu(sock, jid, updated);
+async function handleDetailsInput(sock, jid, text, user) {
+  const parsed = parseNameAndEmail(text);
+  const emailValid = parsed && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parsed.email);
+
+  if (!parsed || !emailValid) {
+    return sock.sendMessage(jid, { text: DETAILS_RETRY_TEXT });
+  }
+
+  updateSession(jid, { pendingName: parsed.name, pendingEmail: parsed.email });
+  setSession(jid, 'confirming_details');
+
+  await sendButtons(
+    sock, jid,
+    `Please confirm your details:\n\n👤 *Name:* ${parsed.name}\n📧 *Email:* ${parsed.email}`,
+    [
+      { id: 'confirm_details', title: '✅ Confirm' },
+      { id: 'edit_details', title: '✏️ Edit' }
+    ]
+  );
+}
+
+async function handleConfirmDetails(sock, jid, text, user) {
+  const session = getSession(jid);
+  const choice = (text || '').trim().toLowerCase();
+
+  if (choice === 'edit_details') {
+    setSession(jid, 'awaiting_details');
+    return sock.sendMessage(jid, { text: DETAILS_RETRY_TEXT });
+  }
+
+  if (choice === 'confirm_details') {
+    const { pendingName, pendingEmail } = (session && session.data) || {};
+    if (!pendingName || !pendingEmail) {
+      setSession(jid, 'awaiting_details');
+      return sock.sendMessage(jid, { text: DETAILS_RETRY_TEXT });
+    }
+    const updated = await userRepo.updateUser(user.id, {
+      name: pendingName, email: pendingEmail, email_submitted: true
+    });
+    clearSession(jid);
+    await showMainMenu(sock, jid, updated);
+    return updated;
+  }
+
+  return sendButtons(
+    sock, jid,
+    '❌ Please tap *Confirm* or *Edit* below.',
+    [
+      { id: 'confirm_details', title: '✅ Confirm' },
+      { id: 'edit_details', title: '✏️ Edit' }
+    ]
+  );
 }
 
 async function showMainMenu(sock, jid, user) {
   clearSession(jid);
   setSession(jid, 'main_menu');
+  const options = MAIN_OPTIONS.map((opt, i) => ({ id: String(i + 1), label: opt.label, description: opt.description }));
+  if (isTestResetNumber(user.phone)) {
+    options.push({
+      id: 'reset_test_user',
+      label: '🔄 Reset Account (test)',
+      description: 'Wipe your name/email so onboarding shows again'
+    });
+  }
   await sendButtonMenu(
     sock, jid,
     `Hi *${user.name}*! What would you like to do?`,
-    MAIN_OPTIONS.map((opt, i) => ({ id: String(i + 1), label: opt.label, description: opt.description })),
+    options,
     'You can also just type the number (1-5).'
   );
+}
+
+async function handleResetTestUser(sock, jid, user) {
+  if (!isTestResetNumber(user.phone)) return showMainMenu(sock, jid, user); // safety net, button is hidden for everyone else anyway
+  await userRepo.updateUser(user.id, { name: '', email: '', email_submitted: false });
+  clearSession(jid);
+  await sock.sendMessage(jid, { text: '🔄 Account reset. Here\'s the welcome flow again 👇' });
+  await askName(sock, jid);
 }
 
 async function handleMainMenuChoice(sock, jid, idx, user) {
@@ -96,6 +187,7 @@ async function startBuyFlow(sock, jid, user, page = 0) {
   const navRows = [{ id: '9', title: '➡️ Next page' }];
   if (page > 0) navRows.unshift({ id: '0', title: '⬅️ Previous page' });
   else navRows.push({ id: '0', title: '↩️ Back to menu' });
+  navRows.push({ id: 'menu', title: '🏠 Menu' });
 
   const sections = [{ title: `Page ${page + 1}`, rows: itemRows }];
   if (itemRows.length + navRows.length <= 10) sections.push({ title: 'Navigate', rows: navRows });
@@ -150,7 +242,11 @@ async function sendProductCard(sock, jid, product, user) {
     try { imageLink = await resolveMediaUrl(firstMedia.file_id); } catch (_) { imageLink = undefined; }
   }
 
-  const buttons = [{ id: '1', title: '💬 Contact Seller' }, { id: '0', title: '⬅️ Back' }];
+  const buttons = [
+    { id: '1', title: '💬 Contact Seller' },
+    { id: '0', title: '⬅️ Back' },
+    { id: 'menu', title: '🏠 Menu' }
+  ];
 
   // sendButtons handles its own fallback chain internally (interactive ->
   // image+text -> plain text), so a single call covers the whole card.
@@ -177,7 +273,7 @@ async function handleViewingProductChoice(sock, jid, text, user) {
       : `${process.env.ADMIN_WHATSAPP}@s.whatsapp.net`;
 
     const introMsg =
-      `🛍️ *New Buyer Interest — CampusMarketplace*\n\n` +
+      `🛍️ *New Buyer Interest — EduGlobalForge*\n\n` +
       `📦 Item: ${product.name}\n` +
       `👤 Buyer: ${user.name} (${user.phone})\n` +
       `📧 Email: ${user.email}\n\n` +
@@ -222,7 +318,7 @@ async function showHelp(sock, jid) {
 }
 
 module.exports = {
-  askName, handleNameInput, handleEmailInput,
-  showMainMenu, handleMainMenuChoice, startBuyFlow, handleBrowsingChoice,
+  askName, handleDetailsInput, handleConfirmDetails,
+  showMainMenu, handleMainMenuChoice, handleResetTestUser, startBuyFlow, handleBrowsingChoice,
   handleViewingProductChoice, showMyListings, showHelp, MAIN_OPTIONS
 };
