@@ -1,7 +1,7 @@
 {
   "name": "campusmarketplace-whatsapp-bot",
   "version": "2.0.0",
-  "description": "CampusMarketplace WhatsApp bot (WhatsApp Cloud API + Supabase + manual bank transfer payments)",
+  "description": "EduGlobalForge WhatsApp bot (WhatsApp Cloud API + Supabase + manual bank transfer payments)",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
