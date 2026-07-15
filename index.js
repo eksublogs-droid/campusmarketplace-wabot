@@ -14,8 +14,8 @@ const multer = require('multer');
 const uploadNone = multer();
 
 const {
-  askName, handleNameInput, handleEmailInput,
-  showMainMenu, handleMainMenuChoice, handleBrowsingChoice,
+  askName, handleDetailsInput, handleConfirmDetails,
+  showMainMenu, handleMainMenuChoice, handleResetTestUser, handleBrowsingChoice,
   handleViewingProductChoice, MAIN_OPTIONS
 } = require('./handlers/user');
 const { handleSellTextStep, handleSellMedia, handleSellFlowSubmission } = require('./handlers/sell');
@@ -122,11 +122,17 @@ async function handleIncomingMessage(message) {
   // equivalent to Baileys' instant read receipt + composing presence.
   waCloudApi.markAsRead(message.id, true).catch(() => {});
 
-  const { user, isNew } = await userRepo.getOrCreateUser(jid, phone);
+  const { user } = await userRepo.getOrCreateUser(jid, phone);
+
+  const registered = !!(user.name && user.email_submitted);
 
   const lower = text.toLowerCase();
-  if (lower === 'menu') { clearSession(jid); return showMainMenu(sock, jid, user); }
-  if (lower === 'cancel') { clearSession(jid); return showMainMenu(sock, jid, user); }
+  if (lower === 'menu' || lower === 'cancel') {
+    clearSession(jid);
+    // Only a registered user has a main menu to return to — mid-onboarding,
+    // "menu"/"cancel" just restarts the name+email prompt instead.
+    return registered ? showMainMenu(sock, jid, user) : askName(sock, jid);
+  }
 
   // Admin command layer (checked first, admin can still browse/sell like anyone else)
   if (isAdmin(phone)) {
@@ -135,9 +141,12 @@ async function handleIncomingMessage(message) {
   }
 
   // ===== registration gate =====
-  if (isNew) return askName(sock, jid);
-  if (!user.name) return handleNameInput(sock, jid, text, user);
-  if (!user.email_submitted) return handleEmailInput(sock, jid, text, user);
+  if (!registered) {
+    const regSession = getSession(jid);
+    if (regSession && regSession.step === 'confirming_details') return handleConfirmDetails(sock, jid, text, user);
+    if (regSession && regSession.step === 'awaiting_details') return handleDetailsInput(sock, jid, text, user);
+    return askName(sock, jid); // first contact, or a lost/expired session
+  }
 
   const session = getSession(jid);
 
@@ -175,6 +184,7 @@ async function handleIncomingMessage(message) {
 
   // ===== route by session step =====
   if (!session || session.step === 'main_menu' || !session.step) {
+    if (text.trim() === 'reset_test_user') return handleResetTestUser(sock, jid, user);
     const idx = parseMenuChoice(text, MAIN_OPTIONS.length);
     if (idx === -1) return showMainMenu(sock, jid, user);
     return handleMainMenuChoice(sock, jid, idx, user);
