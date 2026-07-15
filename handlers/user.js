@@ -26,17 +26,25 @@ function isTestResetNumber(phone) {
 // Several phrasings for the very first message a new contact gets — picked
 // at random so it isn't a byte-identical template every time.
 const WELCOME_VARIANTS = [
-  '👋 Welcome to *EduGlobalForge*!\n\nTo get started, please send me your *name* and *Gmail address*.\n\nYou can write them together on one line, separated by a comma:\n📌 _Jane, abcd1234@gmail.com_\n\nOr on two separate lines:\n📌 _Jane_\n📌 _abcd1234@gmail.com_\n\nEither format works fine — just send whichever is easier for you.',
-  '👋 Hey, thanks for reaching out — this is *EduGlobalForge*!\n\nPlease send your *name* and *Gmail address* so I can set up your account.\n\nOne line, comma-separated:\n📌 _Jane, abcd1234@gmail.com_\n\nOr two lines:\n📌 _Jane_\n📌 _abcd1234@gmail.com_\n\nAny of the two formats is fine.',
-  '👋 Hi there! You\'ve reached *EduGlobalForge*.\n\nFirst, I\'ll need your *name* and *Gmail address*. You can send them either:\n\n1️⃣ On one line, separated by a comma:\n📌 _Jane, abcd1234@gmail.com_\n\n2️⃣ Or on two lines:\n📌 _Jane_\n📌 _abcd1234@gmail.com_\n\nWhichever is easier for you works.',
-  '👋 Welcome aboard — *EduGlobalForge* here!\n\nMind sharing your *name* and *Gmail address*? You can send them together like this:\n📌 _Jane, abcd1234@gmail.com_\n\nOr on separate lines:\n📌 _Jane_\n📌 _abcd1234@gmail.com_'
+  '👋 Welcome to *EduGlobalForge*!\n\nTo get started, please send me your *name* and *Gmail address*.\n\nYou can write them together on one line, separated by a comma:\n📌 _John Doe, abcd1234@gmail.com_\n\nOr on two separate lines:\n📌 _John Doe_\n📌 _abcd1234@gmail.com_\n\nEither format works fine — just send whichever is easier for you.',
+  '👋 Hey, thanks for reaching out — this is *EduGlobalForge*!\n\nPlease send your *name* and *Gmail address* so I can set up your account.\n\nOne line, comma-separated:\n📌 _John Doe, abcd1234@gmail.com_\n\nOr two lines:\n📌 _John Doe_\n📌 _abcd1234@gmail.com_\n\nAny of the two formats is fine.',
+  '👋 Hi there! You\'ve reached *EduGlobalForge*.\n\nFirst, I\'ll need your *name* and *Gmail address*. You can send them either:\n\n1️⃣ On one line, separated by a comma:\n📌 _John Doe, abcd1234@gmail.com_\n\n2️⃣ Or on two lines:\n📌 _John Doe_\n📌 _abcd1234@gmail.com_\n\nWhichever is easier for you works.',
+  '👋 Welcome aboard — *EduGlobalForge* here!\n\nMind sharing your *name* and *Gmail address*? You can send them together like this:\n📌 _John Doe, abcd1234@gmail.com_\n\nOr on separate lines:\n📌 _John Doe_\n📌 _abcd1234@gmail.com_'
 ];
 
 const DETAILS_RETRY_TEXT =
   '❌ I couldn\'t read that. Please send your *name* and *Gmail address* in one of these formats:\n\n' +
-  '📌 _Jane, abcd1234@gmail.com_\n\n' +
+  '📌 _John Doe, abcd1234@gmail.com_\n\n' +
   'or\n\n' +
-  '📌 _Jane_\n📌 _abcd1234@gmail.com_';
+  '📌 _John Doe_\n📌 _abcd1234@gmail.com_';
+
+// Shown when the user taps Edit — a plain re-ask, not an error, since
+// nothing actually went wrong the first time.
+const EDIT_PROMPT_TEXT =
+  '✏️ No problem — please resend your *name* and *Gmail address* in one of these formats:\n\n' +
+  '📌 _John Doe, abcd1234@gmail.com_\n\n' +
+  'or\n\n' +
+  '📌 _John Doe_\n📌 _abcd1234@gmail.com_';
 
 async function askName(sock, jid) {
   setSession(jid, 'awaiting_details');
@@ -95,19 +103,20 @@ async function handleConfirmDetails(sock, jid, text, user) {
 
   if (choice === 'edit_details') {
     setSession(jid, 'awaiting_details');
-    return sock.sendMessage(jid, { text: DETAILS_RETRY_TEXT });
+    return sock.sendMessage(jid, { text: EDIT_PROMPT_TEXT });
   }
 
   if (choice === 'confirm_details') {
     const { pendingName, pendingEmail } = (session && session.data) || {};
     if (!pendingName || !pendingEmail) {
       setSession(jid, 'awaiting_details');
-      return sock.sendMessage(jid, { text: DETAILS_RETRY_TEXT });
+      return sock.sendMessage(jid, { text: EDIT_PROMPT_TEXT });
     }
     const updated = await userRepo.updateUser(user.id, {
       name: pendingName, email: pendingEmail, email_submitted: true
     });
     clearSession(jid);
+    await sock.sendMessage(jid, { text: `✅ Details saved! Welcome aboard, *${pendingName}*.` });
     await showMainMenu(sock, jid, updated);
     return updated;
   }
