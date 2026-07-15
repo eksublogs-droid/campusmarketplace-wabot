@@ -8,7 +8,7 @@ const { sendLikeHuman, pickVariant } = require('../utils/humanize');
 const { resolveMediaUrl } = require('../utils/media');
 
 const MAIN_OPTIONS = [
-  { label: '💰 Buy Used Items', description: 'Browse affordable second-hand items from students near you' },
+  { label: '🛒 Items to Buy', description: 'Browse affordable second-hand items from students near you' },
   { label: '💰 Sell Used Items', description: 'List an item you no longer need and reach buyers on campus' },
   { label: '📋 My Listings', description: 'View your posted items' },
   { label: '💎 Upgrade to Pro', description: 'Pin a listing to the top' },
