@@ -71,6 +71,36 @@ async function uploadBuffer(buffer, mimeType, bucket = 'product-media') {
   return data.publicUrl;
 }
 
+// Uploads a buffer directly to WhatsApp's own Media API
+// (POST /{phone_number_id}/media) and returns the resulting media `id`.
+// Sending a message with { id } instead of { link } means Meta never has
+// to fetch the file from a third party (Telegram) in the background —
+// that background fetch was failing silently (WhatsApp accepts the send
+// immediately, then reports the real failure later via a `statuses`
+// webhook, which nothing was reading). Uploading the bytes ourselves
+// removes that failure point entirely.
+async function uploadToWhatsApp(buffer, mimeType) {
+  const PHONE_NUMBER_ID = process.env.WA_PHONE_NUMBER_ID;
+  const ACCESS_TOKEN = process.env.WA_ACCESS_TOKEN;
+  if (!PHONE_NUMBER_ID || !ACCESS_TOKEN) {
+    throw new Error('WA_PHONE_NUMBER_ID / WA_ACCESS_TOKEN not set on the server');
+  }
+
+  const isVideo = mimeType && mimeType.includes('video');
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('file', new Blob([buffer], { type: mimeType || 'image/jpeg' }), isVideo ? 'video.mp4' : 'photo.jpg');
+
+  const res = await fetch(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/media`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${ACCESS_TOKEN}` },
+    body: form
+  });
+  const data = await res.json();
+  if (!data.id) throw new Error(data?.error?.message || 'WhatsApp media upload failed');
+  return data.id;
+}
+
 // Deletes stored files. Only applies to Supabase-backed buckets (e.g.
 // payment-receipts) — product photos live in the free/unlimited Telegram
 // channel now, so there's nothing to clean up there; safe no-op.
@@ -92,4 +122,4 @@ async function deleteFiles(items, bucket = 'product-media') {
   if (error) console.error('deleteFiles error:', error.message);
 }
 
-module.exports = { uploadBuffer, deleteFiles, resolveMediaUrl };
+module.exports = { uploadBuffer, deleteFiles, resolveMediaUrl, uploadToWhatsApp };
