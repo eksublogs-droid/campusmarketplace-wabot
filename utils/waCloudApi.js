@@ -75,18 +75,26 @@ async function sendMessage(jid, content) {
   if (content.text !== undefined) {
     payload = { messaging_product: 'whatsapp', to, type: 'text', text: { body: content.text, preview_url: false } };
   } else if (content.image) {
+    // `id` (a WhatsApp-hosted media id) is preferred — no external fetch
+    // for Meta to do, so nothing to fail silently in the background.
+    // `link` still works as a fallback for callers that pass one (e.g. the
+    // WordPress gallery preview flow uses plain URLs, not this function).
     payload = {
       messaging_product: 'whatsapp',
       to,
       type: 'image',
-      image: { link: content.image.url, caption: content.caption || '' }
+      image: content.image.id
+        ? { id: content.image.id, caption: content.caption || '' }
+        : { link: content.image.url, caption: content.caption || '' }
     };
   } else if (content.video) {
     payload = {
       messaging_product: 'whatsapp',
       to,
       type: 'video',
-      video: { link: content.video.url, caption: content.caption || '' }
+      video: content.video.id
+        ? { id: content.video.id, caption: content.caption || '' }
+        : { link: content.video.url, caption: content.caption || '' }
     };
   } else if (content.document) {
     payload = {
