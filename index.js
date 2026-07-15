@@ -374,12 +374,33 @@ app.get('/api/listing/:id', async (req, res) => {
     res.json({
       ok: true,
       name: product.name,
+      status: product.status,
+      reject_reason: product.reject_reason,
       category: product.category,
+      subcategory: product.subcategory,
+      brand: product.brand,
       condition: product.condition,
       selling_price: product.selling_price,
+      original_price: product.original_price,
+      negotiable: product.negotiable,
+      lowest_price: product.lowest_price,
       description: product.description,
+      used_duration: product.used_duration,
+      has_defects: product.has_defects,
+      defects_details: product.defects_details,
+      was_repaired: product.was_repaired,
+      repairs_details: product.repairs_details,
+      reason_for_selling: product.reason_for_selling,
       state: product.state,
+      capital: product.capital,
+      lga: product.lga,
       city: product.city,
+      door_dropoff: product.door_dropoff,
+      door_pickup: product.door_pickup,
+      receipt_available: product.receipt_available,
+      warranty_remaining: product.warranty_remaining,
+      warranty_duration: product.warranty_duration,
+      original_packaging: product.original_packaging,
       media
     });
   } catch (err) {
@@ -463,6 +484,22 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
     const galleryLink = `${LISTING_GALLERY_URL}?id=${product.id}`;
     const yesNo = (v) => (v ? 'Yes' : 'No');
 
+    // The first media item is sent as a real photo/video attachment (see
+    // sendMediaPreview below) so the notification isn't text-only. Whatever
+    // is left is described accurately here instead of a generic "see all
+    // photos" line.
+    const firstMedia = media[0] || null;
+    const remainingMedia = media.slice(1);
+    const remPhotos = remainingMedia.filter(m => m.type === 'photo').length;
+    const remVideos = remainingMedia.filter(m => m.type === 'video').length;
+    const remParts = [];
+    if (remPhotos) remParts.push(`${remPhotos} photo${remPhotos > 1 ? 's' : ''}`);
+    if (remVideos) remParts.push(`${remVideos} video${remVideos > 1 ? 's' : ''}`);
+    const remainingLabel = remParts.join(' and ');
+    const mediaLinkLine = remainingLabel
+      ? `🔗 *See the remaining ${remainingLabel}:* ${galleryLink}`
+      : `🔗 *View full listing details:* ${galleryLink}`;
+
     // Full detail block — shared by both the seller and admin messages.
     // Sent as a plain text message (4096-char limit), never as an
     // interactive "buttons" body (1024-char limit), since 20 fields of
@@ -486,20 +523,40 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
       `🧾 *Receipt Available:* ${product.receipt_available || 'Not answered'}\n` +
       `🛡 *Warranty:* ${product.warranty_remaining === 'yes' ? (product.warranty_duration || 'Yes') : (product.warranty_remaining || 'Not answered')}\n` +
       `📦 *Original Packaging:* ${product.original_packaging || 'Not answered'}\n` +
-      `🖼 *Photos/Videos:* ${media.length}\n` +
-      `🔗 *See all photos:* ${galleryLink}`;
+      `🖼 *Photos/Videos:* ${media.length} sent\n` +
+      `${mediaLinkLine}`;
 
-    // ---- To the seller: full detail, plain text (no length limit issue) ----
+    // Sends the first media item as an actual WhatsApp photo/video message
+    // (not just a link) — resolves the Telegram file_id to a short-lived
+    // URL right before sending, per utils/media.js. Non-fatal: a failure
+    // here shouldn't block the text notification that follows.
+    async function sendMediaPreview(jid) {
+      if (!firstMedia) return;
+      try {
+        const url = await resolveMediaUrl(firstMedia.file_id);
+        const caption = `📦 *${product.name}* — ${priceStr}`;
+        await waCloudApi.sendMessage(jid, firstMedia.type === 'video'
+          ? { video: { url }, caption }
+          : { image: { url }, caption }
+        );
+      } catch (err) {
+        console.error(`media preview send to ${jid} failed:`, err.message);
+      }
+    }
+
+    // ---- To the seller: photo/video preview, then full detail as plain text ----
+    await sendMediaPreview(`${phone}@s.whatsapp.net`);
     await waCloudApi.sendMessage(`${phone}@s.whatsapp.net`, {
       text:
         `✅ *Listing submitted for review!*\n\n${detailLines}\n\n` +
         `Our team will review it shortly. You'll get a message here once it's approved. Reply *menu* to return.`
-    }).catch(() => {});
+    }).catch(err => console.error('seller notify failed:', err.message));
 
-    // ---- To admin: full detail as plain text first ... ----
+    // ---- To admin: photo/video preview, then full detail as plain text ----
+    await sendMediaPreview(adminJid);
     await waCloudApi.sendMessage(adminJid, {
       text: `🆕 *New Listing Pending Review*\n\n${detailLines}\n\n👤 *Seller:* ${phone}`
-    }).catch(() => {});
+    }).catch(err => console.error('admin notify (detail) failed:', err.message));
 
     // ...then a short separate Approve/Reject buttons message (interactive
     // message bodies are capped at ~1024 chars by WhatsApp, so it can't
@@ -513,7 +570,7 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
           { id: `reject ${product.id}`, title: '❌ Reject' }
         ]
       }
-    }).catch(() => {});
+    }).catch(err => console.error('admin notify (buttons) failed:', err.message));
 
     res.json({ ok: true, productId: product.id });
     clearSession(`${phone}@s.whatsapp.net`);
