@@ -234,6 +234,13 @@ app.post('/webhook', async (req, res) => {
     if (!value) return;
 
     const messages = value.messages || [];
+    const statuses = value.statuses || [];
+
+    for (const s of statuses) {
+      if (s.status === 'failed') {
+        console.error('WhatsApp delivery failed:', JSON.stringify(s.errors || s));
+      }
+    }
 
     for (const message of messages) {
       if (message.from === undefined) continue;
@@ -341,7 +348,7 @@ ${err.validationErrors ? JSON.stringify(err.validationErrors, null, 2) : ''}
 });
 
 const supabase = require('./utils/supabaseClient');
-const { uploadBuffer, resolveMediaUrl } = require('./utils/media');
+const { uploadBuffer, resolveMediaUrl, uploadToWhatsApp } = require('./utils/media');
 const LISTING_GALLERY_URL = 'https://eduglobalforge.com/pastquestions/listing';
 const uploadMedia = multer(); // memory storage — no dest given, so files stay as req.file.buffer
 
@@ -522,7 +529,8 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
       `📝 *Description:* ${product.description || '-'}\n` +
       `💰 *Selling Price:* ${priceStr}\n` +
       `🧾 *Original Price:* ${origPriceStr}\n` +
-      `🤝 *Negotiable:* ${yesNo(negotiable)}${negotiable && lowestPrice ? ` (lowest: ₦${lowestPrice.toLocaleString()})` : ''}\n` +
+      `🤝 *Negotiable:* ${yesNo(negotiable)}\n` +
+      `${negotiable && lowestPrice ? `💵 *Lowest Price:* ₦${lowestPrice.toLocaleString()}\n` : ''}` +
       `⏳ *Used For:* ${product.used_duration || '-'}\n` +
       `⚠️ *Defects:* ${hasDefects ? (product.defects_details || 'Yes') : 'None'}\n` +
       `🔧 *Repairs:* ${wasRepaired ? (product.repairs_details || 'Yes') : 'None'}\n` +
@@ -533,39 +541,72 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
       `🧾 *Receipt Available:* ${product.receipt_available || 'Not answered'}\n` +
       `🛡 *Warranty:* ${product.warranty_remaining === 'yes' ? (product.warranty_duration || 'Yes') : (product.warranty_remaining || 'Not answered')}\n` +
       `📦 *Original Packaging:* ${product.original_packaging || 'Not answered'}\n` +
-      `🖼 *Photos/Videos:* ${media.length} sent\n` +
-      `${mediaLinkLine}`;
+      `🖼 *Photos/Videos:* ${media.length} sent`;
 
     // Sends the first media item as an actual WhatsApp photo/video message
-    // (not just a link) — resolves the Telegram file_id to a short-lived
-    // URL right before sending, per utils/media.js. Non-fatal: a failure
-    // here shouldn't block the text notification that follows.
-    async function sendMediaPreview(jid) {
-      if (!firstMedia) return;
+    // (not just a link). Downloads the bytes from Telegram ourselves, then
+    // uploads them straight to WhatsApp's own Media API to get a media
+    // `id` — that's what actually gets sent, instead of a `link` that Meta
+    // would have to go fetch from Telegram on its own in the background
+    // (that background fetch was the thing failing silently before: Meta
+    // accepts the send with a 200 immediately, then reports the real
+    // failure later via a `statuses` webhook — see /webhook above).
+    // Non-fatal: a failure here shouldn't block the text notification.
+    async function sendMediaPreview(jid, caption) {
+      if (!firstMedia) return false;
       try {
-        const url = await resolveMediaUrl(firstMedia.file_id);
-        const caption = `📦 *${product.name}* — ${priceStr}`;
+        const tgUrl = await resolveMediaUrl(firstMedia.file_id);
+        const fileRes = await fetch(tgUrl);
+        if (!fileRes.ok) throw new Error(`Telegram file fetch failed (${fileRes.status})`);
+        const buffer = Buffer.from(await fileRes.arrayBuffer());
+        const mimeType = firstMedia.type === 'video' ? 'video/mp4' : 'image/jpeg';
+        const mediaId = await uploadToWhatsApp(buffer, mimeType);
+
         await waCloudApi.sendMessage(jid, firstMedia.type === 'video'
-          ? { video: { url }, caption }
-          : { image: { url }, caption }
+          ? { video: { id: mediaId }, caption }
+          : { image: { id: mediaId }, caption }
         );
+        return true;
       } catch (err) {
         console.error(`media preview send to ${jid} failed:`, err.message);
+        return false;
       }
     }
 
-    // ---- To the seller: photo/video preview, then full detail as plain text ----
-    await sendMediaPreview(`${phone}@s.whatsapp.net`);
+    // ---- To the seller ----
+    // 1) Full detail text (all 20 fields), ending with a line pointing at
+    //    the photo + gallery link that follow in the next message.
+    const sellerIntroLine = firstMedia
+      ? `👇 *Your photo preview is below, along with the link to view the full listing.*`
+      : mediaLinkLine;
+
     await waCloudApi.sendMessage(`${phone}@s.whatsapp.net`, {
-      text:
-        `✅ *Listing submitted for review!*\n\n${detailLines}\n\n` +
-        `Our team will review it shortly. You'll get a message here once it's approved. Reply *menu* to return.`
-    }).catch(err => console.error('seller notify failed:', err.message));
+      text: `✅ *Listing submitted for review!*\n\n${detailLines}\n\n${sellerIntroLine}`
+    }).catch(err => console.error('seller notify (detail) failed:', err.message));
+
+    // 2) The actual first photo/video, captioned with the gallery link for
+    //    the rest of the media + the review note (skipped if no media).
+    if (firstMedia) {
+      await sendMediaPreview(`${phone}@s.whatsapp.net`,
+        `${mediaLinkLine}\n\n` +
+        `Our team will review it shortly. You'll get a message here and the listing page will update once it's approved.\n\n` +
+        `Reply *menu* to return.`
+      );
+    }
+
+    // 3) A tappable Menu button — same pattern as the admin Approve/Reject
+    //    buttons below, so it's a real button, not just the typed instruction.
+    await waCloudApi.sendMessage(`${phone}@s.whatsapp.net`, {
+      buttons: {
+        body: 'Tap below to return to the menu anytime.',
+        buttons: [{ id: 'menu', title: '📋 Menu' }]
+      }
+    }).catch(err => console.error('seller notify (menu button) failed:', err.message));
 
     // ---- To admin: photo/video preview, then full detail as plain text ----
-    await sendMediaPreview(adminJid);
+    await sendMediaPreview(adminJid, `📦 *${product.name}* — ${priceStr}`);
     await waCloudApi.sendMessage(adminJid, {
-      text: `🆕 *New Listing Pending Review*\n\n${detailLines}\n\n👤 *Seller:* ${phone}`
+      text: `🆕 *New Listing Pending Review*\n\n${detailLines}\n\n${mediaLinkLine}\n\n👤 *Seller:* ${phone}`
     }).catch(err => console.error('admin notify (detail) failed:', err.message));
 
     // ...then a short separate Approve/Reject buttons message (interactive
