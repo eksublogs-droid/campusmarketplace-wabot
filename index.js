@@ -587,6 +587,26 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
       }
     }
 
+    // Uploads the first media item to WhatsApp's Media API and returns its
+    // media id (for use as an interactive-message header), instead of
+    // sending it as a standalone message. Same download/upload logic as
+    // sendMediaPreview above, just without the immediate send.
+    async function uploadFirstMedia() {
+      if (!firstMedia) return null;
+      try {
+        const tgUrl = await resolveMediaUrl(firstMedia.file_id);
+        const fileRes = await fetch(tgUrl);
+        if (!fileRes.ok) throw new Error(`Telegram file fetch failed (${fileRes.status})`);
+        const buffer = Buffer.from(await fileRes.arrayBuffer());
+        const mimeType = firstMedia.type === 'video' ? 'video/mp4' : 'image/jpeg';
+        const mediaId = await uploadToWhatsApp(buffer, mimeType);
+        return { mediaId, type: firstMedia.type };
+      } catch (err) {
+        console.error('first media upload (seller combined message) failed:', err.message);
+        return null;
+      }
+    }
+
     // ---- To the seller ----
     // 1) Full detail text (all 20 fields), ending with a line pointing at
     //    the photo + gallery link that follow in the next message.
@@ -598,24 +618,24 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
       text: `✅ *Listing submitted for review!*\n\n${detailLines}\n\n${sellerIntroLine}`
     }).catch(err => console.error('seller notify (detail) failed:', err.message));
 
-    // 2) The actual first photo/video, captioned with the gallery link for
-    //    the rest of the media + the review note (skipped if no media).
-    if (firstMedia) {
-      await sendMediaPreview(`${phone}@s.whatsapp.net`,
-        `${mediaLinkLine}\n\n` +
-        `Our team will review it shortly. You'll get a message here and the listing page will update once it's approved.\n\n` +
-        `Reply *menu* to return.`
-      );
-    }
+    // 2) One combined message: the first photo/video as the header, the
+    //    gallery link + review note as the body, and the Menu button in
+    //    the same bubble — replaces the old 2 separate messages (photo,
+    //    then a standalone Menu-button message).
+    const sellerFirstUpload = await uploadFirstMedia();
+    const sellerBody =
+      `${mediaLinkLine}\n\n` +
+      `Our team will review it shortly. You'll get a message here and the listing page will update once it's approved.`;
 
-    // 3) A tappable Menu button — same pattern as the admin Approve/Reject
-    //    buttons below, so it's a real button, not just the typed instruction.
     await waCloudApi.sendMessage(`${phone}@s.whatsapp.net`, {
       buttons: {
-        body: 'Tap below to return to the menu anytime.',
+        ...(sellerFirstUpload
+          ? { header: { type: sellerFirstUpload.type === 'video' ? 'video' : 'image', id: sellerFirstUpload.mediaId } }
+          : {}),
+        body: sellerFirstUpload ? sellerBody : 'Tap below to return to the menu anytime.',
         buttons: [{ id: 'menu', title: '📋 Menu' }]
       }
-    }).catch(err => console.error('seller notify (menu button) failed:', err.message));
+    }).catch(err => console.error('seller notify (combined media+menu) failed:', err.message));
 
     // ---- To admin: photo/video preview, then full detail as plain text ----
     await sendMediaPreview(adminJid, `📦 *${product.name}* — ${priceStr}`);
