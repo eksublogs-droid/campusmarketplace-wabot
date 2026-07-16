@@ -60,7 +60,7 @@ async function graphGet(path) {
 function buildHeader(header) {
   if (!header) return undefined;
   if (typeof header === 'string') return { type: 'text', text: header };
-  return { type: header.type, [header.type]: { link: header.link } };
+  return { type: header.type, [header.type]: header.id ? { id: header.id } : { link: header.link } };
 }
 
 // Converts our internal content shapes into a Cloud API message payload and
