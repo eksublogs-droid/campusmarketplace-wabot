@@ -371,6 +371,20 @@ app.post('/api/upload-media', uploadMedia.single('file'), async (req, res) => {
 // Public, no-login endpoint that powers the WordPress gallery page
 // ([egf_listing_gallery] shortcode). Only returns the item's own details
 // and resolved photo/video links — never the seller's phone number.
+// Resolves a single Telegram file_id to a real, viewable image/video URL.
+// Used by the sell form's draft-restore step to show the actual photo
+// instead of a generic "Restored" placeholder — the listing doesn't exist
+// yet at that point (nothing's submitted), so /api/listing/:id (which
+// needs a saved product) doesn't apply here.
+app.get('/api/media/:file_id', async (req, res) => {
+  try {
+    const url = await resolveMediaUrl(req.params.file_id);
+    res.json({ ok: true, url });
+  } catch (err) {
+    res.status(404).json({ ok: false, error: err.message });
+  }
+});
+
 app.get('/api/listing/:id', async (req, res) => {
   try {
     const product = await productRepo.getProductById(req.params.id);
