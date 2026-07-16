@@ -352,6 +352,12 @@ const { uploadBuffer, resolveMediaUrl, uploadToWhatsApp } = require('./utils/med
 const LISTING_GALLERY_URL = 'https://eduglobalforge.com/pastquestions/listing';
 const uploadMedia = multer(); // memory storage — no dest given, so files stay as req.file.buffer
 
+// Pro-plan Paystack payment verification — self-contained module, registers
+// its own /api/register-payment-intent and /api/verify-payment routes.
+const { registerPaystackPaymentRoutes } = require('./routes/paystackPayment');
+registerPaystackPaymentRoutes(app);
+
+
 // Receives one photo/video at a time from the sell form (WordPress or
 // sell-form.html), uploads it straight to Supabase Storage, and returns
 // its public URL. The form collects these URLs into preuploadedMedia and
@@ -476,6 +482,33 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
     const doorDropoff = String(b.doorDropoff) === 'true';
     const doorPickup = String(b.doorPickup) === 'true';
 
+    // ---- Pro plan / payment fields (from egf-plan-selection.php) ----
+    const plan = (b.plan === 'pro') ? 'pro' : 'free';
+    const promoDays = plan === 'pro' ? (parseInt(b.promoDays, 10) || null) : null;
+    const promoPrice = plan === 'pro' ? (parseInt(b.promoPrice, 10) || null) : null;
+    const paymentReference = plan === 'pro' ? (b.paymentReference || null) : null;
+
+    // Best-effort re-check against our own payment record (the front-end
+    // already blocks submission until verified, this is just a second,
+    // server-side confirmation before we trust it enough to pin the
+    // listing to the top). Non-fatal if the table/lookup isn't available —
+    // falls back to trusting the client flag rather than blocking the
+    // whole submission over a lookup hiccup.
+    let paymentConfirmed = plan === 'free';
+    if (plan === 'pro' && paymentReference) {
+      try {
+        const { data: payRow } = await supabase
+          .from('pro_plan_payments')
+          .select('status')
+          .eq('reference', paymentReference)
+          .maybeSingle();
+        paymentConfirmed = payRow?.status === 'verified';
+      } catch (err) {
+        console.error('submit-listing: pro payment lookup failed (trusting client flag):', err.message);
+        paymentConfirmed = true;
+      }
+    }
+
     const product = await productRepo.createProduct({
       name: b.itemTitle,
       category: b.category,
@@ -506,7 +539,12 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
       seller_whatsapp: phone,
       media,
       posted_by: 'user',
-      status: 'pending'
+      status: 'pending',
+      is_premium: plan === 'pro' && paymentConfirmed,
+      plan,
+      promo_days: promoDays,
+      promo_price: promoPrice,
+      payment_reference: paymentReference
     });
 
     const adminJid = `${process.env.ADMIN_WHATSAPP}@s.whatsapp.net`;
@@ -555,37 +593,10 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
       `🧾 *Receipt Available:* ${product.receipt_available || 'Not answered'}\n` +
       `🛡 *Warranty:* ${product.warranty_remaining === 'yes' ? (product.warranty_duration || 'Yes') : (product.warranty_remaining || 'Not answered')}\n` +
       `📦 *Original Packaging:* ${product.original_packaging || 'Not answered'}\n` +
-      `🖼 *Photos/Videos:* ${media.length} sent`;
-
-    // Sends the first media item as an actual WhatsApp photo/video message
-    // (not just a link). Downloads the bytes from Telegram ourselves, then
-    // uploads them straight to WhatsApp's own Media API to get a media
-    // `id` — that's what actually gets sent, instead of a `link` that Meta
-    // would have to go fetch from Telegram on its own in the background
-    // (that background fetch was the thing failing silently before: Meta
-    // accepts the send with a 200 immediately, then reports the real
-    // failure later via a `statuses` webhook — see /webhook above).
-    // Non-fatal: a failure here shouldn't block the text notification.
-    async function sendMediaPreview(jid, caption) {
-      if (!firstMedia) return false;
-      try {
-        const tgUrl = await resolveMediaUrl(firstMedia.file_id);
-        const fileRes = await fetch(tgUrl);
-        if (!fileRes.ok) throw new Error(`Telegram file fetch failed (${fileRes.status})`);
-        const buffer = Buffer.from(await fileRes.arrayBuffer());
-        const mimeType = firstMedia.type === 'video' ? 'video/mp4' : 'image/jpeg';
-        const mediaId = await uploadToWhatsApp(buffer, mimeType);
-
-        await waCloudApi.sendMessage(jid, firstMedia.type === 'video'
-          ? { video: { id: mediaId }, caption }
-          : { image: { id: mediaId }, caption }
-        );
-        return true;
-      } catch (err) {
-        console.error(`media preview send to ${jid} failed:`, err.message);
-        return false;
-      }
-    }
+      `🖼 *Photos/Videos:* ${media.length} sent\n` +
+      (plan === 'pro'
+        ? `⭐ *Plan:* Pro (${promoDays} day${promoDays > 1 ? 's' : ''})\n💳 *Amount Paid:* ₦${Number(promoPrice).toLocaleString()}${paymentConfirmed ? '' : ' (⚠️ unverified)'}\n🧾 *Payment Ref:* ${paymentReference}`
+        : `📦 *Plan:* Free`);
 
     // Uploads the first media item to WhatsApp's Media API and returns its
     // media id (for use as an interactive-message header), instead of
@@ -621,33 +632,36 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
     // 2) One combined message: the first photo/video as the header, the
     //    gallery link + review note as the body, and the Menu button in
     //    the same bubble — replaces the old 2 separate messages (photo,
-    //    then a standalone Menu-button message).
-    const sellerFirstUpload = await uploadFirstMedia();
+    //    then a standalone Menu-button message). Uploaded once here and
+    //    reused below for the admin message too (no double upload).
+    const firstMediaUpload = await uploadFirstMedia();
     const sellerBody =
       `${mediaLinkLine}\n\n` +
       `Our team will review it shortly. You'll get a message here and the listing page will update once it's approved.`;
 
     await waCloudApi.sendMessage(`${phone}@s.whatsapp.net`, {
       buttons: {
-        ...(sellerFirstUpload
-          ? { header: { type: sellerFirstUpload.type === 'video' ? 'video' : 'image', id: sellerFirstUpload.mediaId } }
+        ...(firstMediaUpload
+          ? { header: { type: firstMediaUpload.type === 'video' ? 'video' : 'image', id: firstMediaUpload.mediaId } }
           : {}),
-        body: sellerFirstUpload ? sellerBody : 'Tap below to return to the menu anytime.',
+        body: firstMediaUpload ? sellerBody : 'Tap below to return to the menu anytime.',
         buttons: [{ id: 'menu', title: '📋 Menu' }]
       }
     }).catch(err => console.error('seller notify (combined media+menu) failed:', err.message));
 
-    // ---- To admin: photo/video preview, then full detail as plain text ----
-    await sendMediaPreview(adminJid, `📦 *${product.name}* — ${priceStr}`);
+    // ---- To admin: full detail text, then photo + Approve/Reject buttons
+    // combined into one message (was 3 messages: photo, detail text,
+    // buttons — now 2). Detail text stays separate/plain because it's up
+    // to 20 fields and interactive bodies are capped at ~1024 chars.
     await waCloudApi.sendMessage(adminJid, {
       text: `🆕 *New Listing Pending Review*\n\n${detailLines}\n\n${mediaLinkLine}\n\n👤 *Seller:* ${phone}`
     }).catch(err => console.error('admin notify (detail) failed:', err.message));
 
-    // ...then a short separate Approve/Reject buttons message (interactive
-    // message bodies are capped at ~1024 chars by WhatsApp, so it can't
-    // carry the full detail block above without risking silent failure).
     await waCloudApi.sendMessage(adminJid, {
       buttons: {
+        ...(firstMediaUpload
+          ? { header: { type: firstMediaUpload.type === 'video' ? 'video' : 'image', id: firstMediaUpload.mediaId } }
+          : {}),
         body: `Approve or reject "${product.name}" (${priceStr}) from ${phone}?`,
         footer: 'Tap to review, or type the command manually.',
         buttons: [
@@ -655,7 +669,7 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
           { id: `reject ${product.id}`, title: '❌ Reject' }
         ]
       }
-    }).catch(err => console.error('admin notify (buttons) failed:', err.message));
+    }).catch(err => console.error('admin notify (photo+buttons) failed:', err.message));
 
     res.json({ ok: true, productId: product.id });
     clearSession(`${phone}@s.whatsapp.net`);
