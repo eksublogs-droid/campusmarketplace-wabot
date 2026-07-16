@@ -28,6 +28,7 @@
 // source of truth either way.
 
 const supabase = require('../utils/supabaseClient');
+const crypto = require('crypto');
 
 function registerPaystackPaymentRoutes(app) {
   app.post('/api/register-payment-intent', async (req, res) => {
@@ -108,6 +109,71 @@ function registerPaystackPaymentRoutes(app) {
     } catch (err) {
       console.error('verify-payment: Paystack request error:', err.message);
       return res.status(502).json({ verified: false, error: 'Could not reach Paystack' });
+    }
+  });
+
+  // -------------------------------------------------------------------
+  // POST /api/paystack-relay
+  //
+  // Paystack itself only supports ONE webhook URL per account, and that
+  // URL is already pointed at WordPress (for regular egf_order payments).
+  // So this route is NOT called by Paystack directly — it's called by
+  // WordPress's own webhook handler, right after WordPress verifies the
+  // real Paystack signature, whenever the paid reference is a Pro Plan
+  // one (starts with "SELLPRO-"). This gives Pro Plan payments the same
+  // server-to-server safety net regular orders already have, without
+  // needing a second Paystack webhook slot.
+  //
+  // Trust here is a shared secret (EGF_RELAY_SECRET), NOT a Paystack
+  // signature — WordPress already did that verification. Set this same
+  // value in Railway's environment variables and in the
+  // EGF_RAILWAY_RELAY_SECRET constant in the WordPress webhook snippet.
+  // -------------------------------------------------------------------
+  app.post('/api/paystack-relay', async (req, res) => {
+    const expectedSecret = process.env.EGF_RELAY_SECRET;
+    const providedSecret = req.get('x-egf-relay-secret') || '';
+
+    if (!expectedSecret) {
+      console.error('paystack-relay: EGF_RELAY_SECRET is not set in env');
+      return res.status(500).json({ ok: false, error: 'Relay not configured' });
+    }
+
+    const expectedBuf = Buffer.from(expectedSecret);
+    const providedBuf = Buffer.from(providedSecret);
+    const secretMatches = expectedBuf.length === providedBuf.length &&
+      crypto.timingSafeEqual(expectedBuf, providedBuf);
+
+    if (!secretMatches) {
+      return res.status(401).json({ ok: false, error: 'Invalid relay secret' });
+    }
+
+    const { reference, amount } = req.body || {};
+    if (!reference) return res.status(400).json({ ok: false, error: 'Missing reference' });
+
+    try {
+      // Idempotency — same reasoning as verify-payment: don't reprocess
+      // if this reference is already marked verified.
+      const { data: existing } = await supabase
+        .from('pro_plan_payments')
+        .select('status')
+        .eq('reference', reference)
+        .maybeSingle();
+
+      if (existing && existing.status === 'verified') {
+        return res.json({ ok: true, status: 'already verified' });
+      }
+
+      await supabase.from('pro_plan_payments').upsert({
+        reference,
+        status: 'verified',
+        verified_amount_kobo: amount || null,
+        verified_at: new Date().toISOString()
+      }, { onConflict: 'reference' });
+
+      return res.json({ ok: true, status: 'verified' });
+    } catch (err) {
+      console.error('paystack-relay: Supabase update failed:', err.message);
+      return res.status(500).json({ ok: false, error: 'Storage error' });
     }
   });
 }
