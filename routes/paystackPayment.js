@@ -1,15 +1,21 @@
 // EGF — Pro Plan Payment Verification (Paystack)
 //
-// Two routes, fully self-contained:
-//   POST /api/register-payment-intent  { reference, amount, days }
-//   POST /api/verify-payment           { reference }
+// Routes:
+//   POST /api/register-payment-intent   { reference, amount, days }
+//   POST /api/create-transfer-charge    { reference, amount, email }  <-- NEW
+//   POST /api/verify-payment            { reference }
+//   POST /api/paystack-relay
 //
-// Uses Paystack's own verify-transaction endpoint as the single source of
-// truth (never trusts the browser's popup callback alone). Requires
-// PAYSTACK_SECRET_KEY in Railway's environment variables — same secret key
-// value already saved in your WordPress EGF Settings page.
+// create-transfer-charge calls Paystack's Charge API directly from the
+// server (fast, stable connection) instead of letting the Paystack Inline
+// popup fetch the transfer account over the user's (often slow) phone
+// connection. Same one-time, expiring "Pay with Transfer" account you
+// already get from the popup — just fetched via a faster path.
 //
-// Storage: Supabase table `pro_plan_payments`. Create it once with:
+// Requires PAYSTACK_SECRET_KEY in Railway's environment variables.
+//
+// Storage: Supabase table `pro_plan_payments` (unchanged, see original
+// comment block below).
 //
 //   create table pro_plan_payments (
 //     id bigint generated always as identity primary key,
@@ -21,11 +27,6 @@
 //     created_at timestamptz default now(),
 //     verified_at timestamptz
 //   );
-//
-// If this table doesn't exist yet, register-payment-intent just logs a
-// warning and continues (non-fatal — it's a best-effort intent log), and
-// verify-payment still works correctly using Paystack directly as the
-// source of truth either way.
 
 const supabase = require('../utils/supabaseClient');
 const crypto = require('crypto');
@@ -49,6 +50,80 @@ function registerPaystackPaymentRoutes(app) {
     res.json({ ok: true });
   });
 
+  // -------------------------------------------------------------------
+  // POST /api/create-transfer-charge
+  //
+  // Server-to-server call to Paystack's Charge API asking for a "Pay with
+  // Transfer" account directly — skips the Inline popup's own channel-
+  // picker round trips (which run on the user's phone connection). Returns
+  // the bank name / account number / expiry so the frontend can render its
+  // own "Pay with Transfer" screen.
+  // -------------------------------------------------------------------
+  app.post('/api/create-transfer-charge', async (req, res) => {
+    const { reference, amount, email } = req.body || {};
+    if (!reference || !amount) {
+      return res.status(400).json({ error: 'Missing reference or amount' });
+    }
+
+    const secretKey = process.env.PAYSTACK_SECRET_KEY;
+    if (!secretKey) {
+      console.error('create-transfer-charge: PAYSTACK_SECRET_KEY is not set in env');
+      return res.status(500).json({ error: 'Payment not configured' });
+    }
+
+    try {
+      // `amount` arrives here in kobo (frontend sends price * 100, same
+      // unit Paystack expects). Store it in naira so this matches the
+      // unit used by register-payment-intent — keeps the `amount` column
+      // consistent no matter which payment path was used.
+      await supabase.from('pro_plan_payments').insert({
+        reference,
+        amount: Math.round(parseInt(amount, 10) / 100),
+        status: 'pending'
+      });
+    } catch (err) {
+      console.error('create-transfer-charge: intent log (non-fatal) failed:', err.message);
+    }
+
+    try {
+      const psRes = await fetch('https://api.paystack.co/charge', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secretKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          email: email || 'seller@campusmarketplace.ng',
+          amount: Math.round(amount), // amount already expected in kobo from frontend
+          reference,
+          bank_transfer: {}
+        })
+      });
+      const psData = await psRes.json();
+
+      if (!psRes.ok || !psData.status) {
+        console.error('create-transfer-charge: Paystack error:', psData.message);
+        return res.status(502).json({ error: psData.message || 'Could not create transfer account' });
+      }
+
+      const details = psData.data && psData.data.bank_transfer;
+      if (!details) {
+        return res.status(502).json({ error: 'Paystack did not return transfer account details' });
+      }
+
+      return res.json({
+        ok: true,
+        bank_name: details.bank_name,
+        account_number: details.account_number,
+        account_expires_at: details.account_expires_at,
+        reference
+      });
+    } catch (err) {
+      console.error('create-transfer-charge: request error:', err.message);
+      return res.status(502).json({ error: 'Could not reach Paystack' });
+    }
+  });
+
   app.post('/api/verify-payment', async (req, res) => {
     const { reference } = req.body || {};
     if (!reference) return res.status(400).json({ error: 'Missing reference' });
@@ -59,8 +134,6 @@ function registerPaystackPaymentRoutes(app) {
       return res.status(500).json({ verified: false, error: 'Payment verification not configured' });
     }
 
-    // ---- Idempotency: if we already verified this reference before, don't
-    // hit Paystack again — just confirm it's still marked verified. ----
     try {
       const { data: existing } = await supabase
         .from('pro_plan_payments')
@@ -72,11 +145,9 @@ function registerPaystackPaymentRoutes(app) {
         return res.json({ verified: true, amount: existing.verified_amount_kobo });
       }
     } catch (err) {
-      // Table may not exist yet — non-fatal, fall through to Paystack check.
       console.error('verify-payment: pre-check lookup failed (continuing):', err.message);
     }
 
-    // ---- Ask Paystack directly — this is the actual source of truth ----
     try {
       const psRes = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
         headers: { Authorization: `Bearer ${secretKey}` }
@@ -112,23 +183,6 @@ function registerPaystackPaymentRoutes(app) {
     }
   });
 
-  // -------------------------------------------------------------------
-  // POST /api/paystack-relay
-  //
-  // Paystack itself only supports ONE webhook URL per account, and that
-  // URL is already pointed at WordPress (for regular egf_order payments).
-  // So this route is NOT called by Paystack directly — it's called by
-  // WordPress's own webhook handler, right after WordPress verifies the
-  // real Paystack signature, whenever the paid reference is a Pro Plan
-  // one (starts with "SELLPRO-"). This gives Pro Plan payments the same
-  // server-to-server safety net regular orders already have, without
-  // needing a second Paystack webhook slot.
-  //
-  // Trust here is a shared secret (EGF_RELAY_SECRET), NOT a Paystack
-  // signature — WordPress already did that verification. Set this same
-  // value in Railway's environment variables and in the
-  // EGF_RAILWAY_RELAY_SECRET constant in the WordPress webhook snippet.
-  // -------------------------------------------------------------------
   app.post('/api/paystack-relay', async (req, res) => {
     const expectedSecret = process.env.EGF_RELAY_SECRET;
     const providedSecret = req.get('x-egf-relay-secret') || '';
@@ -151,8 +205,6 @@ function registerPaystackPaymentRoutes(app) {
     if (!reference) return res.status(400).json({ ok: false, error: 'Missing reference' });
 
     try {
-      // Idempotency — same reasoning as verify-payment: don't reprocess
-      // if this reference is already marked verified.
       const { data: existing } = await supabase
         .from('pro_plan_payments')
         .select('status')
