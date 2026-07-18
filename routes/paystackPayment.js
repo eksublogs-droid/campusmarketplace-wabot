@@ -108,14 +108,14 @@ function registerPaystackPaymentRoutes(app) {
         return res.status(502).json({ error: psData.message || 'Could not create transfer account' });
       }
 
-      const details = psData.data && psData.data.bank_transfer;
-      if (!details) {
+      const details = psData.data;
+      if (!details || !details.account_number) {
         return res.status(502).json({ error: 'Paystack did not return transfer account details' });
       }
 
       return res.json({
         ok: true,
-        bank_name: details.bank_name,
+        bank_name: details.bank && details.bank.name,
         account_number: details.account_number,
         account_expires_at: details.account_expires_at,
         reference
