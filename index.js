@@ -255,6 +255,14 @@ app.post('/webhook', async (req, res) => {
 
 // ===== Dashboard API =====
 
+// Public, read-only — returns only the Paystack PUBLIC key (safe to expose
+// client-side by design). Used by the sell-item page so the key only ever
+// needs to be set/changed in one place: the PAYSTACK_PUBLIC_KEY Railway
+// environment variable. Never put the secret key here.
+app.get('/api/config', (req, res) => {
+  res.json({ paystackPublicKey: process.env.PAYSTACK_PUBLIC_KEY || '' });
+});
+
 app.get('/api/status', async (req, res) => {
   const status = await botStatus.getStatus();
   res.json(status);
@@ -349,7 +357,7 @@ ${err.validationErrors ? JSON.stringify(err.validationErrors, null, 2) : ''}
 
 const supabase = require('./utils/supabaseClient');
 const { uploadBuffer, resolveMediaUrl, uploadToWhatsApp } = require('./utils/media');
-const LISTING_GALLERY_URL = 'https://eduglobalforge.com/pastquestions/listing';
+const LISTING_GALLERY_URL = 'https://eduglobalforge.com/sell-item/summary';
 const uploadMedia = multer(); // memory storage — no dest given, so files stay as req.file.buffer
 
 // Pro-plan Paystack payment verification — self-contained module, registers
