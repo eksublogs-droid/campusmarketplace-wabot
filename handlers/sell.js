@@ -47,7 +47,7 @@ async function startSellFlow(sock, jid, user) {
   // this server's own /public/sell-form.html. The form itself calls back
   // to THIS server's /api/upload-media and /api/submit-listing (that's
   // what the CORS block in index.js is for).
-  const SELL_FORM_URL = 'https://eduglobalforge.com/pastquestions/sellitems';
+  const SELL_FORM_URL = 'https://eduglobalforge.com/sell-item';
   if (SELL_FORM_URL) {
     const phone = jid.split('@')[0];
     const formUrl = `${SELL_FORM_URL}?userId=${encodeURIComponent(phone)}`;
@@ -208,7 +208,7 @@ async function finishSellFlow(sock, jid, user) {
   clearSession(jid);
 
   const priceStr = `₦${Number(product.selling_price).toLocaleString()}`;
-  const galleryLink = `https://eduglobalforge.com/pastquestions/listing?id=${product.id}`;
+  const galleryLink = `https://eduglobalforge.com/sell-item/summary?id=${product.id}`;
 
   await sock.sendMessage(jid, {
     text:
