@@ -96,7 +96,9 @@ function registerPaystackPaymentRoutes(app) {
           email: email || 'seller@campusmarketplace.ng',
           amount: Math.round(amount), // amount already expected in kobo from frontend
           reference,
-          bank_transfer: { account_expires_at: null }
+          bank_transfer: {
+            account_expires_at: new Date(Date.now() + 20 * 60 * 1000).toISOString()
+          }
         })
       });
       const psData = await psRes.json();
