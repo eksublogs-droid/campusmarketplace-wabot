@@ -416,6 +416,16 @@ app.get('/api/listing/:id', async (req, res) => {
       }
     }
 
+    let receiptMediaOut = null;
+    if (product.receipt_file_id) {
+      try {
+        const url = await resolveMediaUrl(product.receipt_file_id);
+        receiptMediaOut = { url };
+      } catch (_) {
+        // expired/bad file_id — just omit the receipt photo, don't break the page
+      }
+    }
+
     res.json({
       ok: true,
       name: product.name,
@@ -440,9 +450,13 @@ app.get('/api/listing/:id', async (req, res) => {
       capital: product.capital,
       lga: product.lga,
       city: product.city,
+      is_student: product.is_student,
+      school: product.school,
+      item_location: product.item_location,
       door_dropoff: product.door_dropoff,
       door_pickup: product.door_pickup,
       receipt_available: product.receipt_available,
+      receipt_media: receiptMediaOut,
       warranty_remaining: product.warranty_remaining,
       warranty_duration: product.warranty_duration,
       original_packaging: product.original_packaging,
@@ -489,6 +503,8 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
     const wasRepaired = String(b.wasRepaired) === 'true';
     const doorDropoff = String(b.doorDropoff) === 'true';
     const doorPickup = String(b.doorPickup) === 'true';
+    // Tri-state: true/false when answered, null when the seller skipped it.
+    const isStudent = b.isStudent === 'true' ? true : (b.isStudent === 'false' ? false : null);
 
     // ---- Pro plan / payment fields (from egf-plan-selection.php) ----
     const plan = (b.plan === 'pro') ? 'pro' : 'free';
@@ -538,9 +554,13 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
       capital: b.capital || '',
       lga: b.lga || '',
       city: b.city,
+      is_student: isStudent,
+      school: b.school || '',
+      item_location: b.itemLocation || '',
       door_dropoff: doorDropoff,
       door_pickup: doorPickup,
       receipt_available: b.receiptAvailable || '',
+      receipt_file_id: b.receiptFileId || null,
       warranty_remaining: b.warrantyRemaining || '',
       warranty_duration: b.warrantyDuration || '',
       original_packaging: b.originalPackaging || '',
@@ -573,9 +593,17 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
     if (remPhotos) remParts.push(`${remPhotos} photo${remPhotos > 1 ? 's' : ''}`);
     if (remVideos) remParts.push(`${remVideos} video${remVideos > 1 ? 's' : ''}`);
     const remainingLabel = remParts.join(' and ');
-    const mediaLinkLine = remainingLabel
-      ? `🔗 *See the remaining ${remainingLabel}:* ${galleryLink}`
-      : `🔗 *View full listing details:* ${galleryLink}`;
+    const hasReceiptUpload = !!(b.receiptFileId && String(b.receiptFileId).trim());
+    let mediaLinkLine;
+    if (remainingLabel && hasReceiptUpload) {
+      mediaLinkLine = `🔗 *See the remaining ${remainingLabel} and your uploaded receipt too:* ${galleryLink}`;
+    } else if (remainingLabel) {
+      mediaLinkLine = `🔗 *See the remaining ${remainingLabel}:* ${galleryLink}`;
+    } else if (hasReceiptUpload) {
+      mediaLinkLine = `🔗 *See your uploaded receipt and full listing details:* ${galleryLink}`;
+    } else {
+      mediaLinkLine = `🔗 *View full listing details:* ${galleryLink}`;
+    }
 
     // Full detail block — shared by both the seller and admin messages.
     // Sent as a plain text message (4096-char limit), never as an
@@ -596,9 +624,11 @@ app.post('/api/submit-listing', uploadNone.none(), async (req, res) => {
       `🔧 *Repairs:* ${wasRepaired ? (product.repairs_details || 'Yes') : 'None'}\n` +
       `❓ *Reason for Selling:* ${product.reason_for_selling || '-'}\n` +
       `📍 *Location:* ${product.city}, ${product.lga ? product.lga + ', ' : ''}${product.state}${product.capital ? ' (Capital: ' + product.capital + ')' : ''}\n` +
+      `🎓 *Student:* ${isStudent === true ? (product.school || 'Yes') : (isStudent === false ? 'No' : 'Not answered')}\n` +
+      `📌 *Item Location:* ${{ hostel: 'School hostel', around: 'Around school area', town: 'Town / far from school' }[product.item_location] || 'Not answered'}\n` +
       `🚚 *Door Dropoff:* ${yesNo(doorDropoff)}\n` +
       `🤝 *Door Pickup:* ${yesNo(doorPickup)}\n` +
-      `🧾 *Receipt Available:* ${product.receipt_available || 'Not answered'}\n` +
+      `🧾 *Receipt Available:* ${product.receipt_available || 'Not answered'}${hasReceiptUpload ? ' (photo uploaded)' : ''}\n` +
       `🛡 *Warranty:* ${product.warranty_remaining === 'yes' ? (product.warranty_duration || 'Yes') : (product.warranty_remaining || 'Not answered')}\n` +
       `📦 *Original Packaging:* ${product.original_packaging || 'Not answered'}\n` +
       `🖼 *Photos/Videos:* ${media.length} sent\n` +
