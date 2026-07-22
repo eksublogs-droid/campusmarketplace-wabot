@@ -23,6 +23,7 @@ const {
   handleUpgradeSelectProduct, handleUpgradeSelectDays, handleUpgradeReceiptMedia
 } = require('./handlers/upgrade');
 const { isAdmin, handleAdminCommand } = require('./handlers/admin');
+const { extractRef, handleBuyerInterestMessage, handleBuyerInterestButton } = require('./handlers/buyerInterest');
 const { checkExpiringProPlans, demoteExpiredProPlans, deleteOldSoldProducts } = require('./utils/cron');
 
 const app = express();
@@ -138,6 +139,19 @@ async function handleIncomingMessage(message) {
   if (isAdmin(phone)) {
     const handled = await handleAdminCommand(sock, jid, text);
     if (handled) return;
+  }
+
+  // ===== "Buy Securely" escrow flow (from the Buy Items page) =====
+  // Works even for an unregistered buyer — this is a warm lead tapping a
+  // button on the website, not someone starting a full bot session, so it
+  // shouldn't be blocked behind the name/email registration gate below.
+  if (message.type === 'interactive') {
+    const handledButton = await handleBuyerInterestButton(sock, jid, text);
+    if (handledButton) return;
+  }
+  if (message.type === 'text' && extractRef(text)) {
+    const handledInterest = await handleBuyerInterestMessage(sock, jid, text);
+    if (handledInterest) return;
   }
 
   // ===== registration gate =====
@@ -396,6 +410,124 @@ app.get('/api/media/:file_id', async (req, res) => {
     res.json({ ok: true, url });
   } catch (err) {
     res.status(404).json({ ok: false, error: err.message });
+  }
+});
+
+// ===== Buy Items page (public) =====
+//
+// Powers the eduglobalforge.com/buy-items/ browse grid. Only ever selects
+// buyer-safe columns (see productRepo.BROWSE_FIELDS) — seller_whatsapp is
+// never part of this query, so it's never in this response even if
+// someone inspects the network tab.
+app.get('/api/products', async (req, res) => {
+  try {
+    const { category, subcategory, state, proximity, negotiable, sort, page, limit, minPrice, maxPrice, condition, brand } = req.query;
+    const result = await productRepo.getFilteredProducts({
+      category, subcategory, state, proximity, negotiable, sort, page, limit, condition, brand,
+      minPrice: minPrice !== undefined ? parseInt(minPrice, 10) : undefined,
+      maxPrice: maxPrice !== undefined ? parseInt(maxPrice, 10) : undefined
+    });
+
+    const CARD_MEDIA_LIMIT = 3;
+    const products = [];
+    for (const p of result.data) {
+      const rawMedia = Array.isArray(p.media) ? p.media : [];
+      const media = [];
+      // Only resolve as many photos as the card will ever show, plus one
+      // extra just to confirm whether "+more photos" should appear — no
+      // point burning a WhatsApp media-URL lookup per photo when the grid
+      // only renders the first 3.
+      for (const m of rawMedia.slice(0, CARD_MEDIA_LIMIT + 1)) {
+        if (!m || !m.file_id) continue;
+        try {
+          const url = await resolveMediaUrl(m.file_id);
+          media.push({ url, type: m.type === 'video' ? 'video' : 'photo' });
+        } catch (_) {
+          // one bad/expired file_id shouldn't break the whole grid
+        }
+      }
+      products.push({
+        ref: p.ref_code,
+        name: p.name,
+        media,
+        media_count: rawMedia.length,
+        category: p.category,
+        subcategory: p.subcategory,
+        condition: p.condition,
+        price: p.selling_price,
+        negotiable: p.negotiable,
+        state: p.state,
+        city: p.city,
+        is_pro: !!p.is_premium,
+        created_at: p.created_at
+      });
+    }
+
+    res.json({ ok: true, products, total: result.total, page: result.page, limit: result.limit });
+  } catch (err) {
+    console.error('products list error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Single product detail for the Buy Items page's product view. Builds its
+// JSON response as an explicit allowlist — seller_whatsapp and the
+// seller's email are intentionally never referenced below, so no future
+// edit to this route can accidentally leak them. Only the seller's first
+// name is included, for a small trust line ("Sold by Chidi").
+app.get('/api/products/ref/:ref', async (req, res) => {
+  try {
+    const product = await productRepo.getProductByRef(req.params.ref);
+    if (!product || product.status !== 'active') {
+      return res.status(404).json({ error: 'Listing not found or no longer available' });
+    }
+
+    const rawMedia = Array.isArray(product.media) ? product.media : [];
+    const media = [];
+    for (const m of rawMedia) {
+      if (!m || !m.file_id) continue;
+      try {
+        const url = await resolveMediaUrl(m.file_id);
+        media.push({ url, type: m.type === 'video' ? 'video' : 'photo' });
+      } catch (_) { /* skip bad file_id */ }
+    }
+
+    let sellerFirstName = '';
+    try {
+      const seller = await userRepo.getUserByPhone(product.seller_whatsapp);
+      if (seller && seller.name) sellerFirstName = String(seller.name).trim().split(/\s+/)[0];
+    } catch (_) { /* trust line is optional, never block the page over it */ }
+
+    res.json({
+      ok: true,
+      ref: product.ref_code,
+      name: product.name,
+      media,
+      description: product.description,
+      category: product.category,
+      subcategory: product.subcategory,
+      brand: product.brand,
+      condition: product.condition,
+      price: product.selling_price,
+      negotiable: product.negotiable,
+      lowest_price: product.negotiable ? product.lowest_price : null,
+      used_duration: product.used_duration,
+      has_defects: !!product.has_defects,
+      defects_details: product.defects_details,
+      reason_for_selling: product.reason_for_selling,
+      door_dropoff: !!product.door_dropoff,
+      door_pickup: !!product.door_pickup,
+      receipt_available: product.receipt_available === 'yes',
+      state: product.state,
+      city: product.city,
+      item_location: product.item_location,
+      seller_first_name: sellerFirstName,
+      is_pro: !!product.is_premium,
+      created_at: product.created_at
+    });
+  } catch (err) {
+    console.error('product detail error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
