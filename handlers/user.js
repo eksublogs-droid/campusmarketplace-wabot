@@ -301,7 +301,9 @@ async function handleBrowsingChoice(sock, jid, text, user) {
 }
 
 async function sendProductCard(sock, jid, product, user) {
-  const galleryLink = `https://eduglobalforge.com/sell-item/summary?id=${product.id}`;
+  const galleryLink = product.ref_code
+    ? `https://eduglobalforge.com/buy-items/?product=${product.ref_code}`
+    : `https://eduglobalforge.com/sell-item/summary?id=${product.id}`;
   const caption =
     `${product.is_premium ? '💎 *PRO LISTING*\n' : ''}` +
     `📦 *${product.name}*\n` +
