@@ -1,7 +1,12 @@
 const productRepo = require('../repos/productRepo');
 const settingsRepo = require('../repos/settingsRepo');
 const paymentRepo = require('../repos/paymentRepo');
+const userRepo = require('../repos/userRepo');
 const { deleteFiles } = require('../utils/media');
+const { getSession, setSession, clearSession } = require('../utils/session');
+const { sendButtons } = require('../utils/interactive');
+
+const LISTING_BASE_URL = 'https://eduglobalforge.com/buy-items/';
 
 function isAdmin(phoneOrJid) {
   const digits = (phoneOrJid || '').replace(/\D/g, '');
@@ -21,6 +26,24 @@ function isAdmin(phoneOrJid) {
 async function handleAdminCommand(sock, jid, text) {
   const trimmed = (text || '').trim();
   const lower = trimmed.toLowerCase();
+
+  // ===== Search Product (two-step: menu button / "find" then a ref code) =====
+  // Checked before anything else so a bare ref code like "EGF-4821" sent in
+  // reply to the prompt below is read as that ref, not as an unknown command.
+  const adminSession = getSession(jid);
+  if (adminSession && adminSession.step === 'admin_awaiting_ref') {
+    clearSession(jid);
+    await searchProductByRef(sock, jid, trimmed);
+    return true;
+  }
+  if (lower === 'admin_search_product' || lower === 'find' || lower === 'search product') {
+    setSession(jid, 'admin_awaiting_ref');
+    await sock.sendMessage(jid, { text: 'Please send the Product ID (e.g. EGF-4821)' });
+    return true;
+  }
+  if (lower.startsWith('find ')) {
+    return searchProductByRef(sock, jid, trimmed.slice(5).trim());
+  }
 
   if (lower === 'pending') return showPending(sock, jid);
   if (lower === 'listings') return showActiveListings(sock, jid);
@@ -80,9 +103,9 @@ async function handleAdminCommand(sock, jid, text) {
 }
 
 async function showAdminHelp(sock, jid) {
-  await sock.sendMessage(jid, {
-    text:
-      `🛠 *Admin Commands*\n\n` +
+  await sendButtons(
+    sock, jid,
+    `🛠 *Admin Commands*\n\n` +
       `*pending* — listings awaiting review\n` +
       `*approve <id>* / *reject <id> [reason]* — review a listing\n` +
       `*listings* — active listings\n` +
@@ -92,8 +115,41 @@ async function showAdminHelp(sock, jid) {
       `*settings* — view bank/pricing settings\n` +
       `*setbank Bank Name | Account Number | Account Name* — add a bank account\n` +
       `*removebank <number>* — remove a bank account (see number in *settings*)\n` +
-      `*setprice <amount>* — set Pro price per day (₦)`
-  });
+      `*setprice <amount>* — set Pro price per day (₦)\n` +
+      `*find <ref>* — look up a product by its ID (e.g. find EGF-4821)`,
+    [{ id: 'admin_search_product', title: '🔍 Search Product' }]
+  );
+}
+
+// Looks up a product by its short ref code (e.g. "EGF-4821") and replies
+// with the full internal view — this is the ONE place seller phone/email
+// are sent anywhere, and it only ever goes to the admin's own WhatsApp
+// chat, never over the public HTTP API.
+async function searchProductByRef(sock, jid, ref) {
+  const cleanRef = (ref || '').trim().toUpperCase();
+  if (!cleanRef) {
+    return sock.sendMessage(jid, { text: '❌ Please send a Product ID, e.g. EGF-4821' });
+  }
+
+  const product = await productRepo.getProductByRef(cleanRef);
+  if (!product) {
+    return sock.sendMessage(jid, { text: `❌ No product found for *${cleanRef}*.` });
+  }
+
+  const seller = product.seller_whatsapp ? await userRepo.getUserByPhone(product.seller_whatsapp) : null;
+  const statusLabel = { active: 'Active', pending: 'Pending', rejected: 'Rejected', sold: 'Sold' }[product.status] || product.status;
+  const floorLine = product.negotiable && product.lowest_price ? ` (Floor: ₦${Number(product.lowest_price).toLocaleString()})` : '';
+
+  const msg =
+    `📦 *${product.name}*\n` +
+    `Price: ₦${Number(product.selling_price).toLocaleString()}${floorLine}\n` +
+    `Status: ${statusLabel}\n\n` +
+    `👤 Seller: ${seller?.name || 'Unknown'}\n` +
+    `📱 WhatsApp: ${product.seller_whatsapp || 'N/A'}\n` +
+    `📧 Email: ${seller?.email || 'N/A'}\n\n` +
+    `View full listing: ${LISTING_BASE_URL}?product=${product.ref_code}`;
+
+  await sock.sendMessage(jid, { text: msg });
 }
 
 async function showPending(sock, jid) {
@@ -122,7 +178,8 @@ async function approveListing(sock, jid, id) {
 
   if (product.seller_whatsapp) {
     const sellerJid = `${product.seller_whatsapp.replace(/\D/g, '')}@s.whatsapp.net`;
-    await sock.sendMessage(sellerJid, { text: `🎉 Your listing *${product.name}* has been approved and is now live!` }).catch(() => {});
+    const liveLink = product.ref_code ? `\n\n🔗 View it live: https://eduglobalforge.com/buy-items/?product=${product.ref_code}` : '';
+    await sock.sendMessage(sellerJid, { text: `🎉 Your listing *${product.name}* has been approved and is now live!${liveLink}` }).catch(() => {});
   }
 }
 
